@@ -1,0 +1,51 @@
+name: CI
+ 
+on:
+  push:
+    branches: [main]
+  pull_request:
+ 
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: "-D warnings"
+ 
+jobs:
+  build:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+ 
+    steps:
+      - uses: actions/checkout@v4
+ 
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+ 
+      # eframe/winit need X11 + xkb dev headers to build on Linux.
+      # Note: NO libssl-dev — we intentionally have no TLS/OpenSSL dependency.
+      - name: Linux system deps
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
+            libxkbcommon-dev libgl1-mesa-dev
+ 
+      - uses: Swatinem/rust-cache@v2
+ 
+      - name: Format
+        run: cargo fmt --all --check
+ 
+      - name: Clippy
+        run: cargo clippy --all-targets --all-features
+ 
+      - name: Test
+        run: cargo test --all-features
+ 
+      - name: Build (release)
+        run: cargo build --release

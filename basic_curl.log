@@ -1,0 +1,24 @@
+  % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current
+                                 Dload  Upload   Total   Spent    Left  Speed
+  0     0    0     0    0     0      0      0 --:--:-- --:--:-- --:--:--     0*   Trying 192.168.0.213:80...
+* Connected to 192.168.0.213 (192.168.0.213) port 80
+* using HTTP/1.x
+* Server auth using Basic with user 'admin'
+> GET /onvif/getsnapshot/?channel=1 HTTP/1.1
+> Host: 192.168.0.213
+> Authorization: Basic YWRtaW46QWRtaW5AMTIz
+> User-Agent: curl/8.12.1
+> Accept: */*
+> 
+* Request completely sent off
+< HTTP/1.1 401 Unauthorized
+< WWW-Authenticate: Digest qop="auth", realm="gSOAP Web Service", nonce="4e4467304d6a46424e4551364d54633059544e6d4e6a513d"
+< Server: gSOAP/2.8
+< X-Frame-Options: SAMEORIGIN
+< Content-Type: text/xml; charset=utf-8
+< Content-Length: 308
+< Connection: close
+< 
+{ [308 bytes data]
+100   308  100   308    0     0   6566      0 --:--:-- --:--:-- --:--:--  6695
+* shutting down connection #0

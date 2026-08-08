@@ -1,0 +1,7 @@
+[toolchain]
+# Pin the channel so local and CI use the same compiler. Change "stable" to a
+# specific version (e.g. "1.92.0") if you want byte-for-byte reproducibility.
+# Note: dependency versions are pinned by the committed Cargo.lock — that's what
+# actually prevents the egui-0.34-vs-0.35 kind of drift.
+channel = "stable"
+components = ["rustfmt", "clippy"]

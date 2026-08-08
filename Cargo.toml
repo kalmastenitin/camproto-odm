@@ -1,0 +1,36 @@
+
+[package]
+name = "camproto-odm"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.92"
+description = "A cross-platform, dependency-light ONVIF Device Manager built in egui."
+authors = ["Nitin Kalmaste"]
+license = "MIT"
+repository = "https://github.com/kalmastenitin/camproto-odm"
+readme = "README.md"
+keywords = ["onvif", "camera", "rtsp", "cctv", "egui"]
+categories = ["multimedia::video", "network-programming", "gui"]
+ 
+# Empty [workspace] makes this crate its own workspace root — it detaches from
+# any parent workspace it happens to live under, and (unlike a workspace member)
+# it honors the [profile.*] tables below.
+[workspace]
+ 
+[dependencies]
+eframe = "0.36.1"
+roxmltree = "0.21.1"
+ureq = { version = "3", default-features = false }
+http-auth = { version = "0.1", features = ["digest-scheme"] }
+sha1 = "0.11.0"
+base64 = "0.23.1"
+image = { version = "0.25", default-features = false, features = ["jpeg"] }
+md-5 = "0.11.0"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
+camproto-ingest = { path = "../camproto-ingest" }
+
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+strip = true
