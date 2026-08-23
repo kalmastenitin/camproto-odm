@@ -58,9 +58,9 @@ struct VTDecompressionOutputCallbackRecord {
     refcon: *mut c_void,
 }
 
-#[link(name = "VideoToolbox", kind = "framework")]
-#[link(name = "CoreMedia", kind = "framework")]
-#[link(name = "CoreVideo", kind = "framework")]
+#[link(name = "VideoToolbox")]
+#[link(name = "CoreMedia" )]
+#[link(name = "CoreVideo")]
 extern "C" {
     fn CMVideoFormatDescriptionCreateFromHEVCParameterSets(
         allocator: *const c_void,
@@ -390,15 +390,18 @@ unsafe extern "C" fn decompress_callback(
 
     CVPixelBufferUnlockBaseAddress(image_buffer, 0);
 
+    let yuv = YuvFrame {
+        y_plane,
+        u_plane,
+        v_plane,
+        width,
+        height,
+        pts: pts_us,
+    };
+    let rgba = super::super::render::yuv_to_rgba(&yuv);
+
     let latest = &*(refcon as *const LatestFrame);
     if let Ok(mut guard) = latest.lock() {
-        *guard = Some(YuvFrame {
-            y_plane,
-            u_plane,
-            v_plane,
-            width,
-            height,
-            pts: pts_us,
-        });
+        *guard = Some(rgba);
     }
 }

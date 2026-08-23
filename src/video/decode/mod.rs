@@ -2,7 +2,10 @@
 
 #[cfg(target_os = "macos")]
 mod macos;
+#[cfg(target_os = "windows")]
+mod windows;
 
+use super::render::RgbaFrame;
 use camproto_ingest::frame::{Codec, MediaFrame};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
@@ -16,7 +19,7 @@ pub struct YuvFrame {
     pub pts: u64,
 }
 
-pub type LatestFrame = Arc<Mutex<Option<YuvFrame>>>;
+pub type LatestFrame = Arc<Mutex<Option<RgbaFrame>>>;
 
 pub fn new_latest_frame() -> LatestFrame {
     Arc::new(Mutex::new(None))
@@ -40,12 +43,16 @@ impl std::fmt::Display for DecodeError {
 #[cfg(target_os = "macos")]
 type PlatformDecoder = macos::VideoToolboxDecoder;
 
+#[cfg(target_os = "windows")]
+type PlatformDecoder = windows::MediaFoundationDecoder;
+
 // Windows and Linux decoders (FFmpeg-based) land in a follow-up step. Until
 // then, this platform simply doesn't decode video — everything else
 // (discovery, auth, snapshots, config) is unaffected.
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
 struct PlatformDecoder;
-#[cfg(not(target_os = "macos"))]
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
 impl PlatformDecoder {
     fn new_h264(_sps: &[u8], _pps: &[u8], _latest: LatestFrame) -> Result<Self, DecodeError> {
         Err(DecodeError::InitFailed(

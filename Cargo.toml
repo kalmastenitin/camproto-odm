@@ -20,7 +20,7 @@ categories = ["multimedia::video", "network-programming", "gui"]
 [dependencies]
 eframe = "0.36.1"
 roxmltree = "0.21.1"
-ureq = { version = "3", default-features = false }
+ureq = { version = "3.4.0", default-features = false }
 http-auth = { version = "0.1", features = ["digest-scheme"] }
 sha1 = "0.11.0"
 base64 = "0.23.1"
@@ -28,9 +28,27 @@ image = { version = "0.25", default-features = false, features = ["jpeg"] }
 md-5 = "0.11.0"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
 camproto-ingest = { path = "../camproto-ingest" }
+chrono = "0.4.45"
+egui_extras = { version = "0.36.1", features = ["datepicker"] }
+jiff = "0.2"
 
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { version = "0.62", features = [
+    "Win32_Media_MediaFoundation",
+    "Win32_System_Com",
+    "Win32_Foundation",
+] }
 
 [profile.release]
 opt-level = 3
 lto = "thin"
 strip = true
+
+[package.metadata.bundle]
+name = "Camproto ODM"
+identifier = "com.camproto.odm"
+version = "0.1.0"
+category = "Developer Tool"
+short_description = "Next-gen ONVIF Device Manager"
+osx_minimum_system_version = "11.0"

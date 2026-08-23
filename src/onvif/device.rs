@@ -281,3 +281,148 @@ fn get_hostname(
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
 }
+
+pub(super) fn get_ptz_uri(
+    agent: &ureq::Agent,
+    uri: &str,
+    creds: &Credentials,
+    created: &str,
+) -> Option<String> {
+    use super::soap::NS_PTZ;
+    let action = format!("{NS_DEVICE}/GetServices");
+    let body =
+        "<tds:GetServices><tds:IncludeCapability>false</tds:IncludeCapability></tds:GetServices>";
+    let resp = soap_call(agent, uri, &action, creds, created, body).ok()?;
+
+    let doc = roxmltree::Document::parse(&resp).ok()?;
+    for svc in doc
+        .descendants()
+        .filter(|n| n.tag_name().name() == "Service")
+    {
+        let ns = svc
+            .children()
+            .find(|n| n.tag_name().name() == "Namespace")
+            .and_then(|n| n.text())
+            .unwrap_or("");
+        if ns == NS_PTZ {
+            return svc
+                .children()
+                .find(|n| n.tag_name().name() == "XAddr")
+                .and_then(|n| n.text())
+                .map(|s| s.trim().to_string());
+        }
+    }
+    None
+}
+
+pub(super) fn get_imaging_uri(
+    agent: &ureq::Agent,
+    uri: &str,
+    creads: &Credentials,
+    created: &str,
+) -> Option<String> {
+    use super::soap::NS_IMAGING;
+
+    let action = format!("{NS_DEVICE}/GetServices");
+    let body =
+        "<tds:GetServices><tds:IncludeCapability>false</tds:IncludeCapability></tds:GetServices>";
+    let resp = soap_call(agent, uri, &action, creads, created, body).ok()?;
+
+    let doc = roxmltree::Document::parse(&resp).ok()?;
+
+    for svc in doc
+        .descendants()
+        .filter(|n| n.tag_name().name() == "Service")
+    {
+        let ns = svc
+            .children()
+            .find(|n| n.tag_name().name() == "Namespace")
+            .and_then(|n| n.text())
+            .unwrap_or("");
+        if ns == NS_IMAGING {
+            return svc
+                .children()
+                .find(|n| n.tag_name().name() == "XAddr")
+                .and_then(|n| n.text())
+                .map(|s| s.trim().to_string());
+        }
+    }
+    None
+}
+
+pub(super) fn get_events_uri(
+    agent: &ureq::Agent,
+    uri: &str,
+    creds: &Credentials,
+    created: &str,
+) -> Option<String> {
+    use super::soap::NS_EVENTS;
+    let action = format!("{NS_DEVICE}/GetServices");
+    let body =
+        "<tds:GetServices><tds:IncludeCapability>false</tds:IncludeCapability></tds:GetServices>";
+    let resp = soap_call(agent, uri, &action, creds, created, body).ok()?;
+
+    let doc = roxmltree::Document::parse(&resp).ok()?;
+    for svc in doc
+        .descendants()
+        .filter(|n| n.tag_name().name() == "Service")
+    {
+        let ns = svc
+            .children()
+            .find(|n| n.tag_name().name() == "Namespace")
+            .and_then(|n| n.text())
+            .unwrap_or("");
+        if ns == NS_EVENTS {
+            return svc
+                .children()
+                .find(|n| n.tag_name().name() == "XAddr")
+                .and_then(|n| n.text())
+                .map(|s| s.trim().to_string());
+        }
+    }
+    None
+}
+
+pub(super) fn get_replay_info(
+    agent: &ureq::Agent,
+    uri: &str,
+    creds: &Credentials,
+    created: &str,
+) -> Option<super::types::ReplayInfo> {
+    use super::soap::{NS_REPLAY, NS_SEARCH};
+    let action = format!("{NS_DEVICE}/GetServices");
+    let body =
+        "<tds:GetServices><tds:IncludeCapability>false</tds:IncludeCapability></tds:GetServices>";
+    let resp = soap_call(agent, uri, &action, creds, created, body).ok()?;
+    let doc = roxmltree::Document::parse(&resp).ok()?;
+
+    let mut search = None;
+    let mut replay = None;
+    for svc in doc
+        .descendants()
+        .filter(|n| n.tag_name().name() == "Service")
+    {
+        let ns = svc
+            .children()
+            .find(|n| n.tag_name().name() == "Namespace")
+            .and_then(|n| n.text())
+            .unwrap_or("");
+        let xaddr = svc
+            .children()
+            .find(|n| n.tag_name().name() == "XAddr")
+            .and_then(|n| n.text())
+            .map(|s| s.trim().to_string());
+        if ns == NS_SEARCH {
+            search = xaddr;
+        } else if ns == NS_REPLAY {
+            replay = xaddr;
+        }
+    }
+    // Both are required for playback to work — if either is absent, the
+    // device doesn't do Profile G properly.
+    Some(super::types::ReplayInfo {
+        search_uri: search?,
+        replay_uri: replay?,
+        device_uri: uri.to_string(),
+    })
+}

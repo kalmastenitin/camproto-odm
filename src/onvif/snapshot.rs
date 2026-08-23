@@ -195,16 +195,28 @@ fn fetch_authenticated_raw(url: &str, authorization: &str) -> Result<Vec<u8>, St
         .write_all(request.as_bytes())
         .map_err(|e| format!("write: {e}"))?;
 
-    let mut buf = Vec::new();
-    stream
-        .read_to_end(&mut buf)
-        .map_err(|e| format!("read: {e}"))?;
+    // Read headers first (up to and including the CRLFCRLF terminator), then
+    // read exactly Content-Length body bytes. We deliberately do NOT read to
+    // EOF — many embedded camera HTTP stacks ignore Connection: close and
+    // keep the socket open, which would deadlock read_to_end until timeout
+    // (that's the "Resource temporarily unavailable" / os error 35 you'd see).
+    let mut buf = Vec::with_capacity(4096);
+    let mut chunk = [0u8; 4096];
+    let header_end = loop {
+        let n = stream.read(&mut chunk).map_err(|e| format!("read: {e}"))?;
+        if n == 0 {
+            return Err("connection closed before headers finished".into());
+        }
+        buf.extend_from_slice(&chunk[..n]);
+        if let Some(idx) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
+            break idx;
+        }
+        if buf.len() > 64 * 1024 {
+            return Err("response headers too large".into());
+        }
+    };
 
-    let idx = buf
-        .windows(4)
-        .position(|w| w == b"\r\n\r\n")
-        .ok_or("malformed HTTP response")?;
-    let header_text = String::from_utf8_lossy(&buf[..idx]);
+    let header_text = String::from_utf8_lossy(&buf[..header_end]);
     let status: u16 = header_text
         .lines()
         .next()
@@ -217,13 +229,58 @@ fn fetch_authenticated_raw(url: &str, authorization: &str) -> Result<Vec<u8>, St
         return Err(format!("snapshot HTTP {status} (raw socket)"));
     }
 
-    let mut body = buf[idx + 4..].to_vec();
-    if header_text
+    let is_chunked = header_text
         .to_ascii_lowercase()
-        .contains("transfer-encoding: chunked")
-    {
+        .lines()
+        .any(|l| l.starts_with("transfer-encoding:") && l.contains("chunked"));
+
+    let content_length: Option<usize> = header_text
+        .to_ascii_lowercase()
+        .lines()
+        .find(|l| l.starts_with("content-length:"))
+        .and_then(|l| l.split(':').nth(1))
+        .and_then(|s| s.trim().parse().ok());
+
+    // Body bytes already in buf after the header terminator.
+    let already = buf.len() - (header_end + 4);
+    let mut body = Vec::with_capacity(content_length.unwrap_or(already + 65_536));
+    body.extend_from_slice(&buf[header_end + 4..]);
+
+    if let Some(total) = content_length {
+        while body.len() < total {
+            let n = stream.read(&mut chunk).map_err(|e| format!("read: {e}"))?;
+            if n == 0 {
+                return Err("connection closed before Content-Length reached".into());
+            }
+            let want = (total - body.len()).min(n);
+            body.extend_from_slice(&chunk[..want]);
+        }
+    } else if is_chunked {
+        // No Content-Length, chunked framing → keep reading until we can dechunk.
+        loop {
+            let n = stream.read(&mut chunk).map_err(|e| format!("read: {e}"))?;
+            if n == 0 {
+                break;
+            }
+            body.extend_from_slice(&chunk[..n]);
+            // Cheap heuristic: chunked body ends with "0\r\n\r\n"
+            if body.windows(5).any(|w| w == b"0\r\n\r\n") {
+                break;
+            }
+        }
         body = dechunk(&body)?;
+    } else {
+        // No Content-Length and no chunked encoding → we truly do have to read
+        // to EOF. Rare, and correct behavior in that case.
+        loop {
+            let n = stream.read(&mut chunk).map_err(|e| format!("read: {e}"))?;
+            if n == 0 {
+                break;
+            }
+            body.extend_from_slice(&chunk[..n]);
+        }
     }
+
     Ok(body)
 }
 

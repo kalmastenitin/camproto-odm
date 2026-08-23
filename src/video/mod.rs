@@ -4,8 +4,7 @@ mod decode;
 mod render;
 mod session;
 
-pub use decode::YuvFrame;
-pub use render::{yuv_to_rgba, RgbaFrame};
+pub use render::RgbaFrame;
 
 use decode::LatestFrame;
 
@@ -27,8 +26,19 @@ impl LiveStream {
 
     /// Take the most recently decoded frame, if a new one landed since the
     /// last call. Cheap: a mutex lock + `Option::take`.
-    pub fn take_frame(&self) -> Option<YuvFrame> {
+    pub fn take_frame(&self) -> Option<RgbaFrame> {
         self.latest.lock().ok().and_then(|mut g| g.take())
+    }
+
+    pub fn start_playback(
+        rtsp_url: String,
+        stream_id: String,
+        start: String,
+        end: String,
+    ) -> LiveStream {
+        let latest = decode::new_latest_frame();
+        let task = session::spawn_playback(rtsp_url, stream_id, latest.clone(), start, end);
+        LiveStream { latest, task }
     }
 }
 

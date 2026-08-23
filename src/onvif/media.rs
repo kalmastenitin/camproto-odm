@@ -68,6 +68,12 @@ pub(super) fn get_profiles(
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty());
 
+        let video_source_token = source_token.clone();
+
+        let has_ptz_config = prof
+            .descendants()
+            .any(|n| n.tag_name().name() == "PTZConfiguration");
+
         out.push(MediaProfile {
             token,
             name,
@@ -76,6 +82,10 @@ pub(super) fn get_profiles(
             rtsp_uri: None,
             snapshot_uri: None,
             source_token,
+            ptz: None,
+            has_ptz_config,
+            imaging: None,
+            video_source_token,
         });
     }
 

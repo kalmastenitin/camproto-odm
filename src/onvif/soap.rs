@@ -8,11 +8,18 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 pub(super) const HTTP_TIMEOUT: Duration = Duration::from_millis(4000);
 pub(super) const NS_DEVICE: &str = "http://www.onvif.org/ver10/device/wsdl";
 pub(super) const NS_MEDIA: &str = "http://www.onvif.org/ver10/media/wsdl";
+pub(super) const NS_PTZ: &str = "http://www.onvif.org/ver20/ptz/wsdl";
+pub(super) const NS_IMAGING: &str = "http://www.onvif.org/ver20/imaging/wsdl";
+pub(super) const NS_EVENTS: &str = "http://www.onvif.org/ver10/events/wsdl";
+pub(super) const NS_SEARCH: &str = "http://www.onvif.org/ver10/search/wsdl";
+pub(super) const NS_REPLAY: &str = "http://www.onvif.org/ver10/replay/wsdl";
+// pub(super) const NS_WSA: &str = "http://www.w3.org/2005/08/addressing";
+// pub(super) const NS_WSNT: &str = "http://docs.oasis-open.org/wsn/b-2";
 
 pub(super) fn build_agent() -> ureq::Agent {
     let config = ureq::Agent::config_builder()
         .timeout_global(Some(HTTP_TIMEOUT))
-        .http_status_as_error(false) // let SOAP faults (HTTP 500) come back as a body
+        .http_status_as_error(false)
         .build();
     ureq::Agent::new_with_config(config)
 }
@@ -33,10 +40,17 @@ pub(super) fn soap_call(
             r#"<s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope" "#,
             r#"xmlns:tds="http://www.onvif.org/ver10/device/wsdl" "#,
             r#"xmlns:trt="http://www.onvif.org/ver10/media/wsdl" "#,
+            r#"xmlns:tptz="http://www.onvif.org/ver20/ptz/wsdl" "#,
             r#"xmlns:tt="http://www.onvif.org/ver10/schema" "#,
             r#"xmlns:wsse="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-secext-1.0.xsd" "#,
             r#"xmlns:wsu="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-utility-1.0.xsd">"#,
-            r#"<s:Header>{security}</s:Header><s:Body>{body}</s:Body></s:Envelope>"#
+            r#"<s:Header>{security}</s:Header><s:Body>{body}</s:Body></s:Envelope>"#,
+            r#"xmlns:timg="http://www.onvif.org/ver20/imaging/wsdl" "#,
+            r#"xmlns:tev="http://www.onvif.org/ver10/events/wsdl" "#,
+            r#"xmlns:wsa="http://www.w3.org/2005/08/addressing" "#,
+            r#"xmlns:wsnt="http://docs.oasis-open.org/wsn/b-2" "#,
+            r#"xmlns:tse="http://www.onvif.org/ver10/search/wsdl" "#,
+            r#"xmlns:trp="http://www.onvif.org/ver10/replay/wsdl" "#,
         ),
         security = security,
         body = body_inner,
@@ -52,6 +66,57 @@ pub(super) fn soap_call(
         .body_mut()
         .read_to_string()
         .map_err(|e| format!("read error: {e}"))?;
+
+    if let Ok(doc) = roxmltree::Document::parse(&text) {
+        if let Some(reason) = soap_fault(&doc) {
+            return Err(reason);
+        }
+    }
+    Ok(text)
+}
+
+pub(super) fn soap_call_addressed(
+    agent: &ureq::Agent,
+    endpoint: &str,
+    to: &str,
+    action: &str,
+    creds: &Credentials,
+    created: &str,
+    body_inner: &str,
+) -> Result<String, String> {
+    let security = security_header(creds, created);
+    let envelope = format!(
+        concat!(
+            r#"<?xml version="1.0" encoding="UTF-8"?>"#,
+            r#"<s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope" "#,
+            r#"xmlns:tev="http://www.onvif.org/ver10/events/wsdl" "#,
+            r#"xmlns:wsa="http://www.w3.org/2005/08/addressing" "#,
+            r#"xmlns:wsnt="http://docs.oasis-open.org/wsn/b-2" "#,
+            r#"xmlns:tt="http://www.onvif.org/ver10/schema" "#,
+            r#"xmlns:wsse="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-secext-1.0.xsd" "#,
+            r#"xmlns:wsu="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-utility-1.0.xsd">"#,
+            r#"<s:Header>"#,
+            r#"<wsa:To>{to}</wsa:To>"#,
+            r#"<wsa:Action>{action}</wsa:Action>"#,
+            r#"{security}"#,
+            r#"</s:Header><s:Body>{body}</s:Body></s:Envelope>"#
+        ),
+        to = xml_escape(to),
+        action = xml_escape(action),
+        security = security,
+        body = body_inner,
+    );
+
+    let content_type = format!("application/soap+xml; charset=utf-8; action=\"{action}\"");
+    let mut resp = agent
+        .post(endpoint)
+        .header("Content-Type", &content_type)
+        .send(&envelope)
+        .map_err(|e| format!("HTTP: {e}"))?;
+    let text = resp
+        .body_mut()
+        .read_to_string()
+        .map_err(|e| format!("read: {e}"))?;
 
     if let Ok(doc) = roxmltree::Document::parse(&text) {
         if let Some(reason) = soap_fault(&doc) {

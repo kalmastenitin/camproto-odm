@@ -24,6 +24,11 @@ pub struct MediaProfile {
     pub rtsp_uri: Option<String>,
     pub snapshot_uri: Option<String>,
     pub source_token: Option<String>,
+    pub ptz: Option<PtzInfo>,
+    pub has_ptz_config: bool,
+
+    pub imaging: Option<ImagingInfo>,
+    pub video_source_token: Option<String>,
 }
 
 #[derive(Clone)]
@@ -33,6 +38,8 @@ pub struct DeviceDetails {
     pub datetime: Option<SystemDateTime>,
     pub network: Option<NetworkConfig>,
     pub ntp: Option<NtpConfig>,
+    pub events: Option<EventsInfo>,
+    pub replay: Option<ReplayInfo>,
 }
 
 pub struct Snapshot {
@@ -79,4 +86,109 @@ pub struct NetworkSetting {
     pub prefix: u32,
     pub gateway: String,
     pub dns: Vec<String>,
+}
+
+#[derive(Clone)]
+pub struct PtzInfo {
+    pub service_uri: String,   // the PTZ service XAddr
+    pub profile_token: String, // the ONVIF media profile this PTZ controls
+    pub device_uri: String,
+}
+
+#[derive(Clone)]
+pub struct PtzPreset {
+    pub token: String,
+    pub name: String,
+}
+
+// ------ Imaging types -----
+#[derive(Clone)]
+pub struct ImagingInfo {
+    pub service_uri: String,
+    pub device_uri: String,
+    pub source_token: String,
+}
+
+#[derive(Clone, Default)]
+pub struct ImagingSettings {
+    pub brightness: Option<f32>,
+    pub contrast: Option<f32>,
+    pub color_saturation: Option<f32>,
+    pub sharpness: Option<f32>,
+
+    pub exposure_mode: Option<String>,
+    pub exposure_time: Option<f32>,
+    pub exposure_gain: Option<f32>,
+    pub exposure_iris: Option<f32>,
+
+    pub white_balance_mode: Option<String>,
+    pub white_balance_cr_gain: Option<f32>,
+    pub white_balance_cb_gain: Option<f32>,
+
+    pub wdr_mode: Option<String>,
+    pub wdr_level: Option<f32>,
+
+    pub backlight_mode: Option<String>,
+    pub backlight_level: Option<f32>,
+
+    pub image_stab_mode: Option<String>,
+    pub image_stab_level: Option<f32>,
+
+    pub ir_cut_filter: Option<String>,
+    pub focus_mode: Option<String>,
+}
+
+#[derive(Clone, Default)]
+pub struct ImagingRanges {
+    pub brightness: Option<(f32, f32)>,
+    pub contrast: Option<(f32, f32)>,
+    pub color_saturation: Option<(f32, f32)>,
+    pub sharpness: Option<(f32, f32)>,
+    pub exposure_time: Option<(f32, f32)>,
+    pub exposure_gain: Option<(f32, f32)>,
+    pub exposure_iris: Option<(f32, f32)>,
+    pub wb_cr_gain: Option<(f32, f32)>,
+    pub wb_cb_gain: Option<(f32, f32)>,
+    pub wdr_level: Option<(f32, f32)>,
+    pub backlight_level: Option<(f32, f32)>,
+    pub image_stab_level: Option<(f32, f32)>,
+    pub focus_speed: Option<(f32, f32)>,
+    pub exposure_modes: Vec<String>,
+    pub wb_modes: Vec<String>,
+    pub wdr_modes: Vec<String>,
+    pub backlight_modes: Vec<String>,
+    pub image_stab_modes: Vec<String>,
+    pub ir_cut_modes: Vec<String>,
+    pub focus_modes: Vec<String>,
+}
+
+#[derive(Clone)]
+pub struct EventsInfo {
+    pub service_uri: String,
+    pub device_uri: String,
+}
+
+// #[derive(Clone)]
+pub struct EventNotification {
+    pub received_at: std::time::SystemTime,
+    pub topic: String,
+    pub source: Option<String>,
+    pub data: Vec<(String, String)>,
+    pub raw: String,
+}
+
+#[derive(Clone)]
+pub struct ReplayInfo {
+    pub search_uri: String, // Recording Search service XAddr
+    pub replay_uri: String, // Replay service XAddr
+    pub device_uri: String, // Device service XAddr (for the clock)
+}
+
+#[derive(Clone, Debug)]
+pub struct Recording {
+    pub token: String,
+    pub earliest: Option<String>,
+    pub latest: Option<String>,
+    pub source_name: Option<String>,
+    pub track_sources: Vec<String>,
 }

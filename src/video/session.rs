@@ -22,6 +22,7 @@ pub(super) fn spawn(
         let config = RtspConfig {
             url: rtsp_url,
             camera_id: stream_id.clone(),
+            ..Default::default()
         };
         eprintln!("DEBUG rtsp url: {}", config.url);
         let (client, rx) = RtspClient::new(config);
@@ -32,6 +33,30 @@ pub(super) fn spawn(
 
         if let Err(e) = client.run().await {
             eprintln!("[{stream_id}] RTSP session ended: {e}");
+        }
+    })
+}
+
+pub(super) fn spawn_playback(
+    rtsp_url: String,
+    stream_id: String,
+    latest: LatestFrame,
+    playback_start: String,
+    playback_end: String,
+) -> tokio::task::JoinHandle<()> {
+    runtime().spawn(async move {
+        let config = RtspConfig {
+            url: rtsp_url,
+            camera_id: stream_id.clone(),
+            playback_start: Some(playback_start),
+            playback_end: Some(playback_end),
+            playback_scale: None, // 1x for v1
+        };
+        eprintln!("DEBUG rtsp playback url: {}", config.url);
+        let (client, rx) = RtspClient::new(config);
+        decode::spawn_decode_task(stream_id.clone(), rx, latest);
+        if let Err(e) = client.run().await {
+            eprintln!("[{stream_id}] RTSP playback session ended: {e}");
         }
     })
 }
