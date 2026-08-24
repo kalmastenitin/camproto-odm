@@ -179,6 +179,10 @@ impl FfmpegDecoder {
                     // Decoder is full: drain, then retry the send as a flush.
                     self.drain_frames()?;
                     avcodec_send_packet(self.ctx, ptr::null());
+                } else {
+                    return Err(DecodeError::SendFailed(format!(
+                        "avcodec_send_packet: {ret}"
+                    )));
                 }
             }
             self.drain_frames()
@@ -307,7 +311,6 @@ impl FfmpegDecoder {
             v_plane: v,
             width: w as u32,
             height: h as u32,
-            pts: 0,
         };
 
         // Convert to RGBA off the UI thread, then publish latest-wins.
