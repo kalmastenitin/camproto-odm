@@ -10,6 +10,10 @@ use camproto_ingest::frame::{Codec, MediaFrame};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 
+// Only macOS and Windows actually decode video; on other platforms nothing
+// ever constructs a YuvFrame, so keep it out of those builds entirely rather
+// than carrying it as dead code.
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 pub struct YuvFrame {
     pub y_plane: Vec<u8>,
     pub u_plane: Vec<u8>,
@@ -27,6 +31,9 @@ pub fn new_latest_frame() -> LatestFrame {
 #[derive(Debug)]
 pub enum DecodeError {
     InitFailed(String),
+    // Only constructed on macOS/Windows, where sending a packet to the
+    // platform decoder can actually fail after init.
+    #[allow(dead_code)]
     SendFailed(String),
 }
 

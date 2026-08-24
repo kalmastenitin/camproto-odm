@@ -1,5 +1,6 @@
 // src/video/render.rs
 
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 use super::decode::YuvFrame;
 
 pub struct RgbaFrame {
@@ -10,6 +11,7 @@ pub struct RgbaFrame {
 
 /// BT.601 full-range YUV->RGB — the standard default for consumer IP camera
 /// streams (most either use BT.601 or don't signal a matrix at all).
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 pub fn yuv_to_rgba(frame: &YuvFrame) -> RgbaFrame {
     let (w, h) = (frame.width as usize, frame.height as usize);
     let mut rgba = vec![0u8; w * h * 4];
