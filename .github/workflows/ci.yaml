@@ -23,7 +23,7 @@ jobs:
 
     steps:
       - name: Checkout camproto-odm
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           path: camproto-odm
 
@@ -31,7 +31,7 @@ jobs:
       # (`../camproto-ingest`), so the sibling repo has to be checked out
       # alongside it for the path dependency to resolve.
       - name: Checkout camproto-ingest
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: kalmastenitin/camproto-ingest
           path: camproto-ingest
