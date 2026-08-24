@@ -78,7 +78,8 @@ jobs:
       - name: Install FFmpeg (vcpkg)
         if: runner.os == 'Windows'
         shell: pwsh
-        run: & "$env:VCPKG_INSTALLATION_ROOT\vcpkg.exe" install ffmpeg:x64-windows-static-md
+        run: |
+          & "$env:VCPKG_INSTALLATION_ROOT\vcpkg.exe" install ffmpeg:x64-windows-static-md
 
       - uses: Swatinem/rust-cache@v2
         with:
