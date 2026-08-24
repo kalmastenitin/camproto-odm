@@ -138,7 +138,8 @@ yet wired up.
   source allow-list) on every PR and weekly.
 ## Contributing
  
-Issues and PRs welcome. CI runs `fmt`, `clippy`, `test`, and a release build on
+Issues and PRs welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) for the full
+setup and PR process. CI runs `fmt`, `clippy`, `test`, and a release build on
 all three OSes, plus the security audit — please make sure those pass locally:
  
 ```bash
