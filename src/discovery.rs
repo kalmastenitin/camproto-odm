@@ -65,7 +65,7 @@ impl DiscoveredDevice {
 }
 
 pub enum DiscoveryEvent {
-    Found(DiscoveredDevice),
+    Found(Box<DiscoveredDevice>),
     Finished,
     Error(String),
 }
@@ -147,7 +147,7 @@ fn ws_discovery_probe(
                 if let Ok(text) = std::str::from_utf8(&buf[..n]) {
                     for dev in parse_probe_matches(text, src.ip()) {
                         if seen.insert(dev.id.clone()) {
-                            let _ = tx.send(DiscoveryEvent::Found(dev));
+                            let _ = tx.send(DiscoveryEvent::Found(Box::new(dev)));
                             ctx.request_repaint();
                         }
                     }
@@ -191,7 +191,7 @@ fn run_targets(
             // answer discovery.
             let found = probe_ws_unicast(*addr.ip()).or_else(|| probe_device_service(&agent, addr));
             if let Some(dev) = found {
-                let _ = tx.send(DiscoveryEvent::Found(dev));
+                let _ = tx.send(DiscoveryEvent::Found(Box::new(dev)));
                 ctx.request_repaint();
             }
         }));
@@ -528,6 +528,7 @@ fn pct_decode(s: &str) -> String {
 ///   * last-octet range `192.168.1.10-50`
 ///   * full range       `192.168.1.10-192.168.1.60`
 ///   * CIDR subnet      `192.168.1.0/24`  (network + broadcast excluded)
+///
 /// A trailing `:port` (default 80) applies to every host produced.
 pub fn parse_targets(input: &str) -> Result<Vec<SocketAddrV4>, String> {
     let s = input.trim();

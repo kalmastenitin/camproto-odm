@@ -4,7 +4,13 @@
 [advisories]
 version = 2
 # Fail on any RUSTSEC advisory. Add IDs here only with a written justification.
-ignore = []
+ignore = [
+    # ttf-parser is unmaintained; no safe upgrade exists. It's a transitive
+    # dep of winit (via sctk-adwaita's Wayland decorations -> ab_glyph ->
+    # owned_ttf_parser), not something we depend on directly or can bump
+    # ourselves. Revisit when winit moves off it.
+    "RUSTSEC-2026-0192",
+]
  
 [licenses]
 version = 2
@@ -23,6 +29,14 @@ allow = [
     "CC0-1.0",
     "Unicode-3.0",
     "Unicode-DFS-2016",
+    # epaint bundles its default fonts (Ubuntu Light + a Noto-derived
+    # emoji/symbol font) under their own font licenses, in addition to
+    # epaint's own MIT/Apache-2.0.
+    "OFL-1.1",
+    "Ubuntu-font-1.0",
+    # ffmpeg-sys-next (the Rust binding crate, not FFmpeg itself) is WTFPL —
+    # about as permissive as licenses get.
+    "WTFPL",
 ]
  
 [bans]

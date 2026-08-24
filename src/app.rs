@@ -16,20 +16,10 @@ const DOT_OK: egui::Color32 = egui::Color32::from_rgb(0x38, 0xd9, 0x66);
 const DOT_ERR: egui::Color32 = egui::Color32::from_rgb(0xe0, 0x3d, 0x3d);
 
 /// Per-device credentials. Held in memory only — never logged or persisted.
-#[derive(Clone)]
+#[derive(Clone, Default)]
 struct DeviceCreds {
     username: String,
     password: String,
-}
-
-impl Default for DeviceCreds {
-    fn default() -> Self {
-        // "admin" is the near-universal ONVIF default; pre-fill to save typing.
-        Self {
-            username: String::new(),
-            password: String::new(),
-        }
-    }
 }
 
 struct ConnectMsg {
@@ -39,7 +29,7 @@ struct ConnectMsg {
 
 enum ConnState {
     Connecting,
-    Connected(onvif::DeviceDetails),
+    Connected(Box<onvif::DeviceDetails>),
     Failed(String),
 }
 
@@ -458,7 +448,7 @@ impl OdmApp {
         }
         for evt in events {
             match evt {
-                DiscoveryEvent::Found(d) => self.upsert(d),
+                DiscoveryEvent::Found(d) => self.upsert(*d),
                 DiscoveryEvent::Finished => {
                     self.scanning = false;
                     self.status = format!("{} device(s)", self.devices.len());
@@ -481,7 +471,7 @@ impl OdmApp {
 
         while let Ok(msg) = self.connect_rx.try_recv() {
             let state = match msg.result {
-                Ok(info) => ConnState::Connected(info),
+                Ok(info) => ConnState::Connected(Box::new(info)),
                 Err(e) => ConnState::Failed(e),
             };
             self.connections.insert(msg.id, state);
@@ -566,8 +556,7 @@ impl OdmApp {
             row.merge_from(d);
         } else {
             self.devices.push(d);
-            self.devices
-                .sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+            self.devices.sort_by_key(|a| a.name.to_lowercase());
         }
     }
 
@@ -999,7 +988,6 @@ impl OdmApp {
             if ui.button("■ Stop").clicked() {
                 self.live = None;
                 self.live_texture = None;
-                return;
             }
         });
         ui.add_space(6.0);
@@ -1551,7 +1539,7 @@ impl OdmApp {
             self.ptz_active.remove(&key);
             let ptz_clone = ptz.clone();
             let creds_clone = onvif_creds.clone();
-            self.ptz_dispatch(ptz_clone, creds_clone, |ptz, creds| onvif::stop(ptz, creds));
+            self.ptz_dispatch(ptz_clone, creds_clone, onvif::stop);
         }
 
         // ---- Presets panel: scrollable, capped height, no run-off.

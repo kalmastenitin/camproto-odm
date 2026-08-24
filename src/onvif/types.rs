@@ -174,6 +174,8 @@ pub struct EventNotification {
     pub topic: String,
     pub source: Option<String>,
     pub data: Vec<(String, String)>,
+    // Kept for a planned raw-XML debug view; not yet surfaced in the UI.
+    #[allow(dead_code)]
     pub raw: String,
 }
 
@@ -189,6 +191,8 @@ pub struct Recording {
     pub token: String,
     pub earliest: Option<String>,
     pub latest: Option<String>,
+    // Kept for the planned recordings list UI; not yet surfaced there.
+    #[allow(dead_code)]
     pub source_name: Option<String>,
     pub track_sources: Vec<String>,
 }

@@ -27,7 +27,7 @@ base64 = "0.23.1"
 image = { version = "0.25", default-features = false, features = ["jpeg"] }
 md-5 = "0.11.0"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
-camproto-ingest = { path = "../camproto-ingest" }
+camproto-ingest = { path = "../camproto-ingest", version = "0.1.4" }
 chrono = "0.4.45"
 egui_extras = { version = "0.36.1", features = ["datepicker"] }
 jiff = "0.2"
@@ -40,11 +40,3 @@ ffmpeg-sys-next = "9.0.0"
 opt-level = 3
 lto = "thin"
 strip = true
-
-[package.metadata.bundle]
-name = "Camproto ODM"
-identifier = "com.camproto.odm"
-version = "0.1.0"
-category = "Developer Tool"
-short_description = "Next-gen ONVIF Device Manager"
-osx_minimum_system_version = "11.0"

@@ -16,7 +16,6 @@ pub struct YuvFrame {
     pub v_plane: Vec<u8>,
     pub width: u32,
     pub height: u32,
-    pub pts: u64,
 }
 
 pub type LatestFrame = Arc<Mutex<Option<RgbaFrame>>>;
@@ -92,7 +91,7 @@ pub fn spawn_decode_task(
             match rx.recv().await {
                 Ok(frame) => {
                     if let Err(mpsc::TrySendError::Full(dropped)) = tx.try_send(frame) {
-                        if dropped.is_keyframe{
+                        if dropped.is_keyframe {
                             eprintln!("[{id_async}] Buffer full, dropped keyframe")
                         }
                     }
@@ -130,7 +129,11 @@ pub fn spawn_decode_task(
                                     #[cfg(target_os = "windows")]
                                     eprintln!(
                                         "[{id_thread}] H265 decoder ready ({})",
-                                        if dec.is_hardware() { "D3D11VA hardware" } else { "SOFTWARE" }
+                                        if dec.is_hardware() {
+                                            "D3D11VA hardware"
+                                        } else {
+                                            "SOFTWARE"
+                                        }
                                     );
                                     #[cfg(not(target_os = "windows"))]
                                     eprintln!("[{id_thread}] H265 decoder ready");
@@ -147,7 +150,7 @@ pub fn spawn_decode_task(
                         }
                     }
                     Codec::H264 { sps, pps } => {
-                         if decoder.is_none() && frame.is_keyframe {
+                        if decoder.is_none() && frame.is_keyframe {
                             match PlatformDecoder::new_h264(
                                 sps.as_ref(),
                                 pps.as_ref(),
@@ -157,7 +160,11 @@ pub fn spawn_decode_task(
                                     #[cfg(target_os = "windows")]
                                     eprintln!(
                                         "[{id_thread}] H264 decoder ready ({})",
-                                        if dec.is_hardware() { "D3D11VA hardware" } else { "SOFTWARE" }
+                                        if dec.is_hardware() {
+                                            "D3D11VA hardware"
+                                        } else {
+                                            "SOFTWARE"
+                                        }
                                     );
                                     #[cfg(not(target_os = "windows"))]
                                     eprintln!("[{id_thread}] H264 decoder ready");

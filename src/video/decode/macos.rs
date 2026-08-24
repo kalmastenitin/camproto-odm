@@ -340,18 +340,12 @@ unsafe extern "C" fn decompress_callback(
     status: OSStatus,
     _info_flags: u32,
     image_buffer: CVPixelBufferRef,
-    pts: CMTime,
+    _pts: CMTime,
     _duration: CMTime,
 ) {
     if status != 0 || image_buffer.is_null() {
         return;
     }
-
-    let pts_us = if pts.timescale != 0 {
-        (pts.value as u64) * 1_000_000 / pts.timescale as u64
-    } else {
-        0
-    };
 
     CVPixelBufferLockBaseAddress(image_buffer, 0);
 
@@ -396,7 +390,6 @@ unsafe extern "C" fn decompress_callback(
         v_plane,
         width,
         height,
-        pts: pts_us,
     };
     let rgba = super::super::render::yuv_to_rgba(&yuv);
 
