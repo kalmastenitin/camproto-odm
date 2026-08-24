@@ -37,13 +37,17 @@ unsafe extern "C" fn get_format(
 // ── Decoder ───────────────────────────────────────────────────────────────────
 
 pub struct FfmpegDecoder {
-    ctx:        *mut AVCodecContext,
-    pkt:        *mut AVPacket,
-    frame:      *mut AVFrame,
-    sw_frame:   *mut AVFrame,
+    ctx: *mut AVCodecContext,
+    pkt: *mut AVPacket,
+    frame: *mut AVFrame,
+    sw_frame: *mut AVFrame,
     annexb_buf: Vec<u8>,
-    is_hw:      bool,
-    latest:     LatestFrame,
+    // Reusable plane buffers to prevent per-frame heap allocations
+    y_buf: Vec<u8>,
+    u_buf: Vec<u8>,
+    v_buf: Vec<u8>,
+    is_hw: bool,
+    latest: LatestFrame,
     frames_decoded: u32,
 }
 
@@ -64,8 +68,13 @@ impl FfmpegDecoder {
         unsafe { Self::create(AV_CODEC_ID_HEVC, vps, sps, pps, latest) }
     }
 
-    pub fn is_hardware(&self) -> bool { self.is_hw }
-    pub fn frames_decoded(&self) -> u32 { self.frames_decoded }
+    pub fn is_hardware(&self) -> bool {
+        self.is_hw
+    }
+
+    pub fn frames_decoded(&self) -> u32 {
+        self.frames_decoded
+    }
 
     unsafe fn create(
         codec_id: AVCodecID,
@@ -133,12 +142,16 @@ impl FfmpegDecoder {
             return Err(DecodeError::InitFailed("alloc failed".into()));
         }
 
+        // Pre-allocate buffer capacities for up to 1080p stream frames
         Ok(Self {
             ctx,
             pkt,
             frame,
             sw_frame,
             annexb_buf: Vec::with_capacity(512 * 1024),
+            y_buf: Vec::with_capacity(1920 * 1080),
+            u_buf: Vec::with_capacity(960 * 540),
+            v_buf: Vec::with_capacity(960 * 540),
             is_hw,
             latest,
             frames_decoded: 0,
@@ -162,8 +175,7 @@ impl FfmpegDecoder {
             (*self.pkt).size = 0;
 
             if ret < 0 {
-                let eagain = -(libc_eagain());
-                if ret == eagain {
+                if is_eagain(ret) {
                     // Decoder is full: drain, then retry the send as a flush.
                     self.drain_frames()?;
                     avcodec_send_packet(self.ctx, ptr::null());
@@ -174,13 +186,10 @@ impl FfmpegDecoder {
     }
 
     unsafe fn drain_frames(&mut self) -> Result<(), DecodeError> {
-        let eagain = -(libc_eagain());
-        let eof_err = AVERROR_EOF;
-
         loop {
             av_frame_unref(self.frame);
             let ret = avcodec_receive_frame(self.ctx, self.frame);
-            if ret == eagain || ret == eof_err {
+            if is_eagain(ret) || ret == AVERROR_EOF {
                 break;
             }
             if ret < 0 {
@@ -220,24 +229,42 @@ impl FfmpegDecoder {
         let uv_w = w / 2;
         let uv_h = h / 2;
 
+        // Take pre-allocated buffers without allocating new heap memory
+        let mut y = std::mem::take(&mut self.y_buf);
+        let mut u = std::mem::take(&mut self.u_buf);
+        let mut v = std::mem::take(&mut self.v_buf);
+
+        y.clear();
+        u.clear();
+        v.clear();
+
+        // Ensure capacity for higher resolution streams (e.g. 4K)
+        if y.capacity() < w * h {
+            y.reserve((w * h) - y.capacity());
+        }
+        if u.capacity() < uv_w * uv_h {
+            u.reserve((uv_w * uv_h) - u.capacity());
+        }
+        if v.capacity() < uv_w * uv_h {
+            v.reserve((uv_w * uv_h) - v.capacity());
+        }
+
         // Full-resolution plane copy respecting stride; no downsampling.
-        let (y_plane, u_plane, v_plane) = if fmt == AVPixelFormat::AV_PIX_FMT_NV12 as i32 {
+        if fmt == AVPixelFormat::AV_PIX_FMT_NV12 as i32 {
             // NV12: full-res Y + interleaved half-res UV (hardware transfer output).
             let y_stride = (*frame).linesize[0] as usize;
             let uv_stride = (*frame).linesize[1] as usize;
             let y_ptr = (*frame).data[0];
             let uv_ptr = (*frame).data[1];
             if y_ptr.is_null() || uv_ptr.is_null() {
+                self.reclaim_buffers(y, u, v);
                 return Ok(());
             }
 
-            let mut y = Vec::with_capacity(w * h);
             for row in 0..h {
                 y.extend_from_slice(std::slice::from_raw_parts(y_ptr.add(row * y_stride), w));
             }
 
-            let mut u = Vec::with_capacity(uv_w * uv_h);
-            let mut v = Vec::with_capacity(uv_w * uv_h);
             for row in 0..uv_h {
                 let src = std::slice::from_raw_parts(uv_ptr.add(row * uv_stride), uv_w * 2);
                 for col in 0..uv_w {
@@ -245,7 +272,6 @@ impl FfmpegDecoder {
                     v.push(src[col * 2 + 1]);
                 }
             }
-            (y, u, v)
         } else if fmt == AVPixelFormat::AV_PIX_FMT_YUV420P as i32 {
             // YUV420P: separate planes (software decode output).
             let y_stride = (*frame).linesize[0] as usize;
@@ -255,42 +281,52 @@ impl FfmpegDecoder {
             let u_ptr = (*frame).data[1];
             let v_ptr = (*frame).data[2];
             if y_ptr.is_null() || u_ptr.is_null() || v_ptr.is_null() {
+                self.reclaim_buffers(y, u, v);
                 return Ok(());
             }
 
-            let mut y = Vec::with_capacity(w * h);
             for row in 0..h {
                 y.extend_from_slice(std::slice::from_raw_parts(y_ptr.add(row * y_stride), w));
             }
-            let mut u = Vec::with_capacity(uv_w * uv_h);
             for row in 0..uv_h {
                 u.extend_from_slice(std::slice::from_raw_parts(u_ptr.add(row * u_stride), uv_w));
             }
-            let mut v = Vec::with_capacity(uv_w * uv_h);
             for row in 0..uv_h {
                 v.extend_from_slice(std::slice::from_raw_parts(v_ptr.add(row * v_stride), uv_w));
             }
-            (y, u, v)
         } else {
+            self.reclaim_buffers(y, u, v);
             return Ok(()); // unexpected format, skip
         };
 
         self.frames_decoded += 1;
 
-        // Convert to RGBA here (off the UI thread), then publish latest-wins.
         let yuv = YuvFrame {
-            y_plane,
-            u_plane,
-            v_plane,
+            y_plane: y,
+            u_plane: u,
+            v_plane: v,
             width: w as u32,
             height: h as u32,
             pts: 0,
         };
+
+        // Convert to RGBA off the UI thread, then publish latest-wins.
         let rgba = render::yuv_to_rgba(&yuv);
+
+        // Reclaim allocated vectors back into `FfmpegDecoder` for the next frame
+        self.reclaim_buffers(yuv.y_plane, yuv.u_plane, yuv.v_plane);
+
         if let Ok(mut guard) = self.latest.lock() {
             *guard = Some(rgba);
         }
         Ok(())
+    }
+
+    #[inline]
+    fn reclaim_buffers(&mut self, y: Vec<u8>, u: Vec<u8>, v: Vec<u8>) {
+        self.y_buf = y;
+        self.u_buf = u;
+        self.v_buf = v;
     }
 }
 
@@ -306,6 +342,11 @@ impl Drop for FfmpegDecoder {
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
+
+#[inline]
+fn is_eagain(ret: i32) -> bool {
+    ret == -11 || ret == ffmpeg_sys_next::AVERROR_EXIT
+}
 
 fn build_extradata(vps: &[u8], sps: &[u8], pps: &[u8]) -> Vec<u8> {
     let mut v = Vec::new();
@@ -334,9 +375,4 @@ fn avcc_to_annexb_into(data: &[u8], out: &mut Vec<u8>) {
         out.extend_from_slice(&data[pos..pos + nal_len]);
         pos += nal_len;
     }
-}
-
-#[inline]
-fn libc_eagain() -> i32 {
-    11
 }

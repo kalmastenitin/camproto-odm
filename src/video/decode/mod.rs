@@ -84,14 +84,18 @@ pub fn spawn_decode_task(
 ) {
     // Bridge async -> blocking. Bounded to 1 so a slow decoder always works
     // on the newest frame rather than building a backlog.
-    let (tx, rx_blocking) = mpsc::sync_channel::<MediaFrame>(1);
+    let (tx, rx_blocking) = mpsc::sync_channel::<MediaFrame>(16);
     let id_async = stream_id.clone();
 
     tokio::spawn(async move {
         loop {
             match rx.recv().await {
                 Ok(frame) => {
-                    let _ = tx.try_send(frame);
+                    if let Err(mpsc::TrySendError::Full(dropped)) = tx.try_send(frame) {
+                        if dropped.is_keyframe{
+                            eprintln!("[{id_async}] Buffer full, dropped keyframe")
+                        }
+                    }
                 }
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
                     eprintln!("[{id_async}] dropped {n} frames (decode falling behind)");
