@@ -123,7 +123,13 @@ pub fn spawn_decode_task(
                                 latest.clone(),
                             ) {
                                 Ok(dec) => {
-                                    println!("[{id_thread}] H265 decoder ready");
+                                    #[cfg(target_os = "windows")]
+                                    eprintln!(
+                                        "[{id_thread}] H265 decoder ready ({})",
+                                        if dec.is_hardware() { "D3D11VA hardware" } else { "SOFTWARE" }
+                                    );
+                                    #[cfg(not(target_os = "windows"))]
+                                    eprintln!("[{id_thread}] H265 decoder ready");
                                     decoder = Some(dec);
                                 }
                                 Err(e) => eprintln!("[{id_thread}] H265 init: {e}"),
@@ -137,14 +143,20 @@ pub fn spawn_decode_task(
                         }
                     }
                     Codec::H264 { sps, pps } => {
-                        if decoder.is_none() && frame.is_keyframe {
+                         if decoder.is_none() && frame.is_keyframe {
                             match PlatformDecoder::new_h264(
                                 sps.as_ref(),
                                 pps.as_ref(),
                                 latest.clone(),
                             ) {
                                 Ok(dec) => {
-                                    println!("[{id_thread}] H264 decoder ready");
+                                    #[cfg(target_os = "windows")]
+                                    eprintln!(
+                                        "[{id_thread}] H264 decoder ready ({})",
+                                        if dec.is_hardware() { "D3D11VA hardware" } else { "SOFTWARE" }
+                                    );
+                                    #[cfg(not(target_os = "windows"))]
+                                    eprintln!("[{id_thread}] H264 decoder ready");
                                     decoder = Some(dec);
                                 }
                                 Err(e) => eprintln!("[{id_thread}] H264 init: {e}"),
