@@ -1,352 +1,289 @@
-// /src/video/decode/windows.rs
+// src/video/decode/windows.rs
+//
+// Windows H264/H265 decoder backed by FFmpeg (libavcodec), ported from
+// camproto-nvr. Tries D3D11VA hardware decode first and falls back to software
+// (YUV420P) transparently. Decoded frames are converted to RGBA on this decode
+// thread — same discipline as the macOS VideoToolbox path, so the UI thread
+// never touches pixels — and published into `LatestFrame`.
 
 #![cfg(target_os = "windows")]
-#![allow(non_snake_case, unused_imports, dead_code)]
+#![allow(dead_code)]
 
 use super::{DecodeError, LatestFrame, YuvFrame};
 use crate::video::render;
+use ffmpeg_sys_next::{
+    AVCodecID::{AV_CODEC_ID_H264, AV_CODEC_ID_HEVC},
+    *,
+};
+use std::ptr;
 
-use windows::core::{Interface, GUID};
-use windows::Win32::Foundation::S_OK;
-use windows::Win32::Media::MediaFoundation::*;
-use windows::Win32::System::Com::*;
+// ── get_format callback ───────────────────────────────────────────────────────
+// Prefer D3D11 hardware surfaces when the decoder offers them.
 
-pub struct MediaFoundationDecoder {
-    transform: IMFTransform,
-    #[allow(dead_code)]
-    input_stream_id: u32,
-    #[allow(dead_code)]
-    output_stream_id: u32,
-    latest: LatestFrame,
-    width: u32,
-    height: u32,
-}
-
-// Send is safe here: the IMFTransform is used from a single decode thread.
-unsafe impl Send for MediaFoundationDecoder {}
-
-impl Drop for MediaFoundationDecoder {
-    fn drop(&mut self) {
-        // MFShutdown once per app is officially required but repeated calls are
-        // no-ops. Skip it — it's global state and would break other decoders
-        // if we ran multiple concurrent streams later.
+unsafe extern "C" fn get_format(
+    _ctx: *mut AVCodecContext,
+    fmts: *const AVPixelFormat,
+) -> AVPixelFormat {
+    let mut p = fmts;
+    while *p != AVPixelFormat::AV_PIX_FMT_NONE {
+        if *p == AVPixelFormat::AV_PIX_FMT_D3D11 {
+            return AVPixelFormat::AV_PIX_FMT_D3D11;
+        }
+        p = p.add(1);
     }
+    *fmts
 }
 
-impl MediaFoundationDecoder {
-    pub fn new_h264(_sps: &[u8], _pps: &[u8], latest: LatestFrame) -> Result<Self, DecodeError> {
-        Self::new(MFVideoFormat_H264, latest)
+// ── Decoder ───────────────────────────────────────────────────────────────────
+
+pub struct FfmpegDecoder {
+    ctx:        *mut AVCodecContext,
+    pkt:        *mut AVPacket,
+    frame:      *mut AVFrame,
+    sw_frame:   *mut AVFrame,
+    annexb_buf: Vec<u8>,
+    is_hw:      bool,
+    latest:     LatestFrame,
+    frames_decoded: u32,
+}
+
+// Safe: the decoder is only ever used from the single decode thread that owns it.
+unsafe impl Send for FfmpegDecoder {}
+
+impl FfmpegDecoder {
+    pub fn new_h264(sps: &[u8], pps: &[u8], latest: LatestFrame) -> Result<Self, DecodeError> {
+        unsafe { Self::create(AV_CODEC_ID_H264, &[], sps, pps, latest) }
     }
 
     pub fn new_h265(
-        _vps: &[u8],
-        _sps: &[u8],
-        _pps: &[u8],
+        vps: &[u8],
+        sps: &[u8],
+        pps: &[u8],
         latest: LatestFrame,
     ) -> Result<Self, DecodeError> {
-        Self::new(MFVideoFormat_HEVC, latest)
+        unsafe { Self::create(AV_CODEC_ID_HEVC, vps, sps, pps, latest) }
     }
 
-    fn new(subtype: GUID, latest: LatestFrame) -> Result<Self, DecodeError> {
-        unsafe {
-            // COM apartment + MF startup. Safe to call repeatedly.
-            let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
-            MFStartup(MF_SDK_VERSION << 16 | MF_API_VERSION, MFSTARTUP_FULL)
-                .map_err(|e| DecodeError::InitFailed(format!("MFStartup: {e}")))?;
+    pub fn is_hardware(&self) -> bool { self.is_hw }
+    pub fn frames_decoded(&self) -> u32 { self.frames_decoded }
 
-            // Find a software-only decoder for our codec.
-            let mut activates: Vec<IMFActivate> = Vec::new();
-            let info = MFT_REGISTER_TYPE_INFO {
-                guidMajorType: MFMediaType_Video,
-                guidSubtype: subtype,
-            };
-            let mut count: u32 = 0;
-            let mut activate_array: *mut Option<IMFActivate> = std::ptr::null_mut();
-            MFTEnumEx(
-                MFT_CATEGORY_VIDEO_DECODER,
-                MFT_ENUM_FLAG_SYNCMFT, // exclude async / hardware MFTs
-                Some(&info),
-                None,
-                &mut activate_array,
-                &mut count,
-            )
-            .map_err(|e| DecodeError::InitFailed(format!("MFTEnumEx: {e}")))?;
-
-            if count == 0 || activate_array.is_null() {
-                return Err(DecodeError::InitFailed(
-                    "no software MFT found for this codec".into(),
-                ));
-            }
-
-            for i in 0..count as isize {
-                if let Some(a) = (*activate_array.offset(i)).take() {
-                    activates.push(a);
-                }
-            }
-            // Free the C array MFTEnumEx allocated. CoTaskMemFree lives in
-            // windows::Win32::System::Com::CoTaskMemFree.
-            windows::Win32::System::Com::CoTaskMemFree(Some(activate_array as *const _));
-
-            // Activate the first candidate into a live IMFTransform.
-            let transform: IMFTransform = activates[0]
-                .ActivateObject()
-                .map_err(|e| DecodeError::InitFailed(format!("ActivateObject: {e}")))?;
-
-            // Every MFT reports its input/output stream IDs — usually just 0/0
-            // but we look them up officially rather than assume.
-            let mut input_ids = [0u32; 1];
-            let mut output_ids = [0u32; 1];
-            let _ = transform.GetStreamIDs(&mut input_ids, &mut output_ids); // OK to ignore E_NOTIMPL
-
-            let input_stream_id = input_ids[0];
-            let output_stream_id = output_ids[0];
-
-            // Build and set the input media type.
-            let input_type: IMFMediaType = MFCreateMediaType()
-                .map_err(|e| DecodeError::InitFailed(format!("MFCreateMediaType input: {e}")))?;
-            input_type
-                .SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video)
-                .map_err(|e| DecodeError::InitFailed(format!("SetGUID MAJOR_TYPE: {e}")))?;
-            input_type
-                .SetGUID(&MF_MT_SUBTYPE, &subtype)
-                .map_err(|e| DecodeError::InitFailed(format!("SetGUID SUBTYPE: {e}")))?;
-            input_type
-                .SetUINT32(&MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive.0 as u32)
-                .map_err(|e| DecodeError::InitFailed(format!("SetUINT32 INTERLACE: {e}")))?;
-
-            transform
-                .SetInputType(input_stream_id, &input_type, 0)
-                .map_err(|e| DecodeError::InitFailed(format!("SetInputType: {e}")))?;
-
-            // Enumerate candidate output types and pick the first that accepts.
-            // We want NV12 (the standard planar 4:2:0 format used everywhere
-            // MF talks video) — matches VideoToolbox's output format exactly.
-            let mut set_output = false;
-            for i in 0.. {
-                match transform.GetOutputAvailableType(output_stream_id, i) {
-                    Ok(candidate) => {
-                        let sub = candidate.GetGUID(&MF_MT_SUBTYPE);
-                        if let Ok(sub) = sub {
-                            if sub == MFVideoFormat_NV12 {
-                                transform
-                                    .SetOutputType(output_stream_id, &candidate, 0)
-                                    .map_err(|e| {
-                                        DecodeError::InitFailed(format!("SetOutputType NV12: {e}"))
-                                    })?;
-                                set_output = true;
-                                break;
-                            }
-                        }
-                    }
-                    Err(_) => break, // MF_E_NO_MORE_TYPES = we've enumerated them all
-                }
-            }
-            if !set_output {
-                return Err(DecodeError::InitFailed(
-                    "no compatible NV12 output type from MFT".into(),
-                ));
-            }
-
-            // Tell the MFT we're ready to stream.
-            transform
-                .ProcessMessage(MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, 0)
-                .map_err(|e| DecodeError::InitFailed(format!("BEGIN_STREAMING: {e}")))?;
-            transform
-                .ProcessMessage(MFT_MESSAGE_NOTIFY_START_OF_STREAM, 0)
-                .map_err(|e| DecodeError::InitFailed(format!("START_OF_STREAM: {e}")))?;
-
-            Ok(Self {
-                transform,
-                input_stream_id,
-                output_stream_id,
-                latest,
-                width: 0,
-                height: 0,
-            })
+    unsafe fn create(
+        codec_id: AVCodecID,
+        vps: &[u8],
+        sps: &[u8],
+        pps: &[u8],
+        latest: LatestFrame,
+    ) -> Result<Self, DecodeError> {
+        let codec = avcodec_find_decoder(codec_id);
+        if codec.is_null() {
+            return Err(DecodeError::InitFailed("codec not found".into()));
         }
+
+        let ctx = avcodec_alloc_context3(codec);
+        if ctx.is_null() {
+            return Err(DecodeError::InitFailed("context alloc failed".into()));
+        }
+
+        // Try D3D11VA. If it fails we run software — no error either way.
+        let mut hw_dev_ctx: *mut AVBufferRef = ptr::null_mut();
+        let gpu = av_hwdevice_ctx_create(
+            &mut hw_dev_ctx,
+            AVHWDeviceType::AV_HWDEVICE_TYPE_D3D11VA,
+            ptr::null(),
+            ptr::null_mut(),
+            0,
+        ) >= 0
+            && !hw_dev_ctx.is_null();
+
+        if gpu {
+            (*ctx).hw_device_ctx = av_buffer_ref(hw_dev_ctx);
+            av_buffer_unref(&mut hw_dev_ctx);
+            (*ctx).get_format = Some(get_format);
+            (*ctx).thread_count = 1;
+        } else {
+            (*ctx).thread_count = 1;
+            (*ctx).skip_frame = AVDiscard::AVDISCARD_NONREF;
+            (*ctx).refs = 2;
+        }
+
+        // Annex-B extradata from the SDP parameter sets.
+        let extra = build_extradata(vps, sps, pps);
+        if !extra.is_empty() {
+            let buf = av_mallocz(extra.len() + AV_INPUT_BUFFER_PADDING_SIZE as usize) as *mut u8;
+            if !buf.is_null() {
+                ptr::copy_nonoverlapping(extra.as_ptr(), buf, extra.len());
+                (*ctx).extradata = buf;
+                (*ctx).extradata_size = extra.len() as i32;
+            }
+        }
+
+        if avcodec_open2(ctx, codec, ptr::null_mut()) < 0 {
+            avcodec_free_context(&mut (ctx as *mut _));
+            return Err(DecodeError::InitFailed("avcodec_open2 failed".into()));
+        }
+        av_log_set_level(-8); // silence FFmpeg's stderr chatter
+
+        let is_hw = !(*ctx).hw_device_ctx.is_null();
+        let pkt = av_packet_alloc();
+        let frame = av_frame_alloc();
+        let sw_frame = av_frame_alloc();
+
+        if pkt.is_null() || frame.is_null() || sw_frame.is_null() {
+            avcodec_free_context(&mut (ctx as *mut _));
+            return Err(DecodeError::InitFailed("alloc failed".into()));
+        }
+
+        Ok(Self {
+            ctx,
+            pkt,
+            frame,
+            sw_frame,
+            annexb_buf: Vec::with_capacity(512 * 1024),
+            is_hw,
+            latest,
+            frames_decoded: 0,
+        })
     }
 
     pub fn send_packet(&mut self, data: &[u8], pts_us: u64) -> Result<(), DecodeError> {
         unsafe {
-            // Wrap the compressed bytes in an IMFSample.
-            let media_buffer: IMFMediaBuffer = MFCreateMemoryBuffer(data.len() as u32)
-                .map_err(|e| DecodeError::SendFailed(format!("MFCreateMemoryBuffer: {e}")))?;
+            // Incoming NALs are AVCC (4-byte length prefix); FFmpeg wants Annex-B.
+            avcc_to_annexb_into(data, &mut self.annexb_buf);
 
-            let mut ptr: *mut u8 = std::ptr::null_mut();
-            let mut _max_len: u32 = 0;
-            let mut _cur_len: u32 = 0;
-            media_buffer
-                .Lock(&mut ptr, Some(&mut _max_len), Some(&mut _cur_len))
-                .map_err(|e| DecodeError::SendFailed(format!("Lock: {e}")))?;
-            std::ptr::copy_nonoverlapping(data.as_ptr(), ptr, data.len());
-            media_buffer
-                .SetCurrentLength(data.len() as u32)
-                .map_err(|e| DecodeError::SendFailed(format!("SetCurrentLength: {e}")))?;
-            media_buffer
-                .Unlock()
-                .map_err(|e| DecodeError::SendFailed(format!("Unlock: {e}")))?;
+            av_packet_unref(self.pkt);
+            (*self.pkt).data = self.annexb_buf.as_ptr() as *mut u8;
+            (*self.pkt).size = self.annexb_buf.len() as i32;
+            (*self.pkt).pts = pts_us as i64;
+            (*self.pkt).buf = ptr::null_mut();
 
-            let sample: IMFSample = MFCreateSample()
-                .map_err(|e| DecodeError::SendFailed(format!("MFCreateSample: {e}")))?;
-            sample
-                .AddBuffer(&media_buffer)
-                .map_err(|e| DecodeError::SendFailed(format!("AddBuffer: {e}")))?;
-            // 100-ns units per MF convention: 10 ticks per us.
-            sample
-                .SetSampleTime((pts_us as i64) * 10)
-                .map_err(|e| DecodeError::SendFailed(format!("SetSampleTime: {e}")))?;
+            let ret = avcodec_send_packet(self.ctx, self.pkt);
+            // Detach our borrowed buffer before it goes out of scope.
+            (*self.pkt).data = ptr::null_mut();
+            (*self.pkt).size = 0;
 
-            self.transform
-                .ProcessInput(self.input_stream_id, &sample, 0)
-                .map_err(|e| DecodeError::SendFailed(format!("ProcessInput: {e}")))?;
-
-            // Drain ready outputs. ProcessOutput returns MF_E_TRANSFORM_NEED_MORE_INPUT
-            // when there's nothing to give us — that's the normal exit condition.
-            loop {
-                match self.pull_output() {
-                    Ok(true) => continue,    // got a frame, may be more waiting
-                    Ok(false) => break,      // need more input, normal
-                    Err(e) => return Err(e), // real error
+            if ret < 0 {
+                let eagain = -(libc_eagain());
+                if ret == eagain {
+                    // Decoder is full: drain, then retry the send as a flush.
+                    self.drain_frames()?;
+                    avcodec_send_packet(self.ctx, ptr::null());
                 }
+            }
+            self.drain_frames()
+        }
+    }
+
+    unsafe fn drain_frames(&mut self) -> Result<(), DecodeError> {
+        let eagain = -(libc_eagain());
+        let eof_err = AVERROR_EOF;
+
+        loop {
+            av_frame_unref(self.frame);
+            let ret = avcodec_receive_frame(self.ctx, self.frame);
+            if ret == eagain || ret == eof_err {
+                break;
+            }
+            if ret < 0 {
+                break;
+            }
+
+            let fmt = (*self.frame).format;
+            let frame_is_hw = fmt == AVPixelFormat::AV_PIX_FMT_D3D11 as i32;
+
+            // Hardware frames live in GPU memory — pull them down to system RAM.
+            let display = if frame_is_hw {
+                av_frame_unref(self.sw_frame);
+                let r = av_hwframe_transfer_data(self.sw_frame, self.frame, 0);
+                if r < 0 {
+                    continue;
+                }
+                self.sw_frame
+            } else {
+                self.frame
+            };
+
+            if let Err(e) = self.extract_yuv(display) {
+                eprintln!("[FFmpeg] extract: {}", e);
             }
         }
         Ok(())
     }
 
-    /// Returns Ok(true) if a frame was decoded, Ok(false) if MFT needs more
-    /// input, Err on real failure.
-    unsafe fn pull_output(&mut self) -> Result<bool, DecodeError> {
-        // Software MFTs allocate their own output samples, so we pass an empty
-        // buffer descriptor and let the MFT fill in ppSample.
-        let mut output_buffer = MFT_OUTPUT_DATA_BUFFER {
-            dwStreamID: self.output_stream_id,
-            pSample: std::mem::ManuallyDrop::new(None),
-            dwStatus: 0,
-            pEvents: std::mem::ManuallyDrop::new(None),
+    unsafe fn extract_yuv(&mut self, frame: *mut AVFrame) -> Result<(), DecodeError> {
+        let w = (*frame).width as usize;
+        let h = (*frame).height as usize;
+        let fmt = (*frame).format;
+        if w == 0 || h == 0 {
+            return Ok(());
+        }
+
+        let uv_w = w / 2;
+        let uv_h = h / 2;
+
+        // Full-resolution plane copy respecting stride; no downsampling.
+        let (y_plane, u_plane, v_plane) = if fmt == AVPixelFormat::AV_PIX_FMT_NV12 as i32 {
+            // NV12: full-res Y + interleaved half-res UV (hardware transfer output).
+            let y_stride = (*frame).linesize[0] as usize;
+            let uv_stride = (*frame).linesize[1] as usize;
+            let y_ptr = (*frame).data[0];
+            let uv_ptr = (*frame).data[1];
+            if y_ptr.is_null() || uv_ptr.is_null() {
+                return Ok(());
+            }
+
+            let mut y = Vec::with_capacity(w * h);
+            for row in 0..h {
+                y.extend_from_slice(std::slice::from_raw_parts(y_ptr.add(row * y_stride), w));
+            }
+
+            let mut u = Vec::with_capacity(uv_w * uv_h);
+            let mut v = Vec::with_capacity(uv_w * uv_h);
+            for row in 0..uv_h {
+                let src = std::slice::from_raw_parts(uv_ptr.add(row * uv_stride), uv_w * 2);
+                for col in 0..uv_w {
+                    u.push(src[col * 2]);
+                    v.push(src[col * 2 + 1]);
+                }
+            }
+            (y, u, v)
+        } else if fmt == AVPixelFormat::AV_PIX_FMT_YUV420P as i32 {
+            // YUV420P: separate planes (software decode output).
+            let y_stride = (*frame).linesize[0] as usize;
+            let u_stride = (*frame).linesize[1] as usize;
+            let v_stride = (*frame).linesize[2] as usize;
+            let y_ptr = (*frame).data[0];
+            let u_ptr = (*frame).data[1];
+            let v_ptr = (*frame).data[2];
+            if y_ptr.is_null() || u_ptr.is_null() || v_ptr.is_null() {
+                return Ok(());
+            }
+
+            let mut y = Vec::with_capacity(w * h);
+            for row in 0..h {
+                y.extend_from_slice(std::slice::from_raw_parts(y_ptr.add(row * y_stride), w));
+            }
+            let mut u = Vec::with_capacity(uv_w * uv_h);
+            for row in 0..uv_h {
+                u.extend_from_slice(std::slice::from_raw_parts(u_ptr.add(row * u_stride), uv_w));
+            }
+            let mut v = Vec::with_capacity(uv_w * uv_h);
+            for row in 0..uv_h {
+                v.extend_from_slice(std::slice::from_raw_parts(v_ptr.add(row * v_stride), uv_w));
+            }
+            (y, u, v)
+        } else {
+            return Ok(()); // unexpected format, skip
         };
-        let mut status: u32 = 0;
 
-        let hr =
-            self.transform
-                .ProcessOutput(0, std::slice::from_mut(&mut output_buffer), &mut status);
+        self.frames_decoded += 1;
 
-        match hr {
-            Ok(()) => {
-                // Frame produced. Extract, deinterleave NV12, publish.
-                if let Some(sample) = std::mem::ManuallyDrop::take(&mut output_buffer.pSample) {
-                    self.publish_frame(&sample)?;
-                }
-                Ok(true)
-            }
-            Err(e) => {
-                let code = e.code();
-                // MF_E_TRANSFORM_NEED_MORE_INPUT: not an error, just "give me more"
-                if code == MF_E_TRANSFORM_NEED_MORE_INPUT {
-                    Ok(false)
-                }
-                // MF_E_TRANSFORM_STREAM_CHANGE: the MFT wants to renegotiate the
-                // output type (usually resolution change). Reset the output type
-                // and retry once.
-                else if code == MF_E_TRANSFORM_STREAM_CHANGE {
-                    self.renegotiate_output()?;
-                    Ok(true)
-                } else {
-                    Err(DecodeError::SendFailed(format!(
-                        "ProcessOutput: 0x{:08x}",
-                        code.0
-                    )))
-                }
-            }
-        }
-    }
-
-    unsafe fn renegotiate_output(&mut self) -> Result<(), DecodeError> {
-        for i in 0.. {
-            match self
-                .transform
-                .GetOutputAvailableType(self.output_stream_id, i)
-            {
-                Ok(t) => {
-                    if let Ok(sub) = t.GetGUID(&MF_MT_SUBTYPE) {
-                        if sub == MFVideoFormat_NV12 {
-                            self.transform
-                                .SetOutputType(self.output_stream_id, &t, 0)
-                                .map_err(|e| {
-                                    DecodeError::SendFailed(format!(
-                                        "SetOutputType (renegotiate): {e}"
-                                    ))
-                                })?;
-                            return Ok(());
-                        }
-                    }
-                }
-                Err(_) => break,
-            }
-        }
-        Err(DecodeError::SendFailed(
-            "no NV12 output after STREAM_CHANGE".into(),
-        ))
-    }
-
-    unsafe fn publish_frame(&mut self, sample: &IMFSample) -> Result<(), DecodeError> {
-        let buffer: IMFMediaBuffer = sample
-            .ConvertToContiguousBuffer()
-            .map_err(|e| DecodeError::SendFailed(format!("ConvertToContiguousBuffer: {e}")))?;
-
-        let mut ptr: *mut u8 = std::ptr::null_mut();
-        let mut _max_len: u32 = 0;
-        let mut cur_len: u32 = 0;
-        buffer
-            .Lock(&mut ptr, Some(&mut _max_len), Some(&mut cur_len))
-            .map_err(|e| DecodeError::SendFailed(format!("Lock output: {e}")))?;
-
-        // Extract width/height from the current output type once we have data
-        // (they can change mid-stream via STREAM_CHANGE).
-        if self.width == 0 || self.height == 0 {
-            if let Ok(t) = self.transform.GetOutputCurrentType(self.output_stream_id) {
-                if let Ok(size) = t.GetUINT64(&MF_MT_FRAME_SIZE) {
-                    // High 32 bits = width, low 32 bits = height (MF convention)
-                    self.width = (size >> 32) as u32;
-                    self.height = (size & 0xFFFF_FFFF) as u32;
-                }
-            }
-        }
-        let w = self.width as usize;
-        let h = self.height as usize;
-
-        if w == 0 || h == 0 || cur_len < (w * h * 3 / 2) as u32 {
-            buffer.Unlock().ok();
-            return Ok(()); // malformed, skip
-        }
-
-        // NV12 layout: full-res Y plane, then interleaved UV plane at half
-        // both dimensions.
-        let src = std::slice::from_raw_parts(ptr, cur_len as usize);
-        let mut y_plane = Vec::with_capacity(w * h);
-        y_plane.extend_from_slice(&src[..w * h]);
-
-        let uv_start = w * h;
-        let uv_w = (w + 1) / 2;
-        let uv_h = (h + 1) / 2;
-        let mut u_plane = Vec::with_capacity(uv_w * uv_h);
-        let mut v_plane = Vec::with_capacity(uv_w * uv_h);
-        for row in 0..uv_h {
-            let row_start = uv_start + row * uv_w * 2;
-            for col in 0..uv_w {
-                u_plane.push(src[row_start + col * 2]);
-                v_plane.push(src[row_start + col * 2 + 1]);
-            }
-        }
-
-        buffer.Unlock().ok();
-
-        // Convert to RGBA off the UI thread (same discipline as macOS path).
+        // Convert to RGBA here (off the UI thread), then publish latest-wins.
         let yuv = YuvFrame {
             y_plane,
             u_plane,
             v_plane,
-            width: self.width,
-            height: self.height,
+            width: w as u32,
+            height: h as u32,
             pts: 0,
         };
         let rgba = render::yuv_to_rgba(&yuv);
@@ -355,4 +292,51 @@ impl MediaFoundationDecoder {
         }
         Ok(())
     }
+}
+
+impl Drop for FfmpegDecoder {
+    fn drop(&mut self) {
+        unsafe {
+            av_frame_free(&mut self.frame);
+            av_frame_free(&mut self.sw_frame);
+            av_packet_free(&mut self.pkt);
+            avcodec_free_context(&mut self.ctx);
+        }
+    }
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+fn build_extradata(vps: &[u8], sps: &[u8], pps: &[u8]) -> Vec<u8> {
+    let mut v = Vec::new();
+    if !vps.is_empty() {
+        v.extend_from_slice(&[0, 0, 0, 1]);
+        v.extend_from_slice(vps);
+    }
+    v.extend_from_slice(&[0, 0, 0, 1]);
+    v.extend_from_slice(sps);
+    v.extend_from_slice(&[0, 0, 0, 1]);
+    v.extend_from_slice(pps);
+    v
+}
+
+fn avcc_to_annexb_into(data: &[u8], out: &mut Vec<u8>) {
+    out.clear();
+    let mut pos = 0;
+    while pos + 4 <= data.len() {
+        let nal_len =
+            u32::from_be_bytes([data[pos], data[pos + 1], data[pos + 2], data[pos + 3]]) as usize;
+        pos += 4;
+        if nal_len == 0 || pos + nal_len > data.len() {
+            break;
+        }
+        out.extend_from_slice(&[0, 0, 0, 1]);
+        out.extend_from_slice(&data[pos..pos + nal_len]);
+        pos += nal_len;
+    }
+}
+
+#[inline]
+fn libc_eagain() -> i32 {
+    11
 }

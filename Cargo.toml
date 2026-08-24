@@ -34,11 +34,7 @@ jiff = "0.2"
 
 
 [target.'cfg(target_os = "windows")'.dependencies]
-windows = { version = "0.62", features = [
-    "Win32_Media_MediaFoundation",
-    "Win32_System_Com",
-    "Win32_Foundation",
-] }
+ffmpeg-sys-next = "9.0.0"
 
 [profile.release]
 opt-level = 3

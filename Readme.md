@@ -49,8 +49,35 @@ sudo apt-get install -y \
   libxkbcommon-dev libgl1-mesa-dev
 ```
  
-macOS and Windows need no extra system packages.
- 
+macOS need no extra system packages.
+
+### Building on Windows
+
+The Windows video decoder is backed by FFmpeg (libavcodec) via `ffmpeg-sys-next`,
+so FFmpeg development libraries must be present at build time. The simplest route
+is vcpkg — the same setup camproto-nvr uses:
+
+    git clone https://github.com/microsoft/vcpkg
+    .\vcpkg\bootstrap-vcpkg.bat
+    .\vcpkg\vcpkg install ffmpeg:x64-windows-static-md
+
+Then point the build at your vcpkg install so `ffmpeg-sys-next` can find it:
+
+    setx VCPKG_ROOT C:\path\to\vcpkg
+
+(Restart the shell after `setx`.) The `-static-md` triplet links FFmpeg
+statically against the dynamic MSVC CRT, which avoids shipping FFmpeg DLLs.
+If you prefer, `ffmpeg:x64-windows` (dynamic) works too.
+
+Alternatively, if you already have a prebuilt FFmpeg (e.g. a BtbN or gyan.dev
+build), skip vcpkg and set `FFMPEG_DIR` to its root instead.
+
+> Hardware decode (D3D11VA) is used automatically when the installed FFmpeg
+> supports it; otherwise the decoder falls back to software. No config needed.
+
+macOS needs no extra prerequisites (VideoToolbox). Linux video decode is not
+yet wired up.
+
 ## Usage
  
 - **Discover LAN** — multicast WS-Discovery across your subnet.

@@ -44,7 +44,7 @@ impl std::fmt::Display for DecodeError {
 type PlatformDecoder = macos::VideoToolboxDecoder;
 
 #[cfg(target_os = "windows")]
-type PlatformDecoder = windows::MediaFoundationDecoder;
+type PlatformDecoder = windows::FfmpegDecoder;
 
 // Windows and Linux decoders (FFmpeg-based) land in a follow-up step. Until
 // then, this platform simply doesn't decode video — everything else

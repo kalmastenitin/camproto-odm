@@ -58,9 +58,9 @@ struct VTDecompressionOutputCallbackRecord {
     refcon: *mut c_void,
 }
 
-#[link(name = "VideoToolbox")]
-#[link(name = "CoreMedia" )]
-#[link(name = "CoreVideo")]
+#[link(name = "VideoToolbox", kind = "framework")]
+#[link(name = "CoreMedia", kind = "framework")]
+#[link(name = "CoreVideo", kind = "framework")]
 extern "C" {
     fn CMVideoFormatDescriptionCreateFromHEVCParameterSets(
         allocator: *const c_void,
