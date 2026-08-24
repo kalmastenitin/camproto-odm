@@ -88,8 +88,15 @@ jobs:
         with:
           workspaces: camproto-odm
 
+      # windows-latest runners preinstall an FFMPEG_DIR pointing at a
+      # headers-less FFmpeg CLI package, which ffmpeg-sys-next's build script
+      # checks before vcpkg (see ci.yaml for the full explanation). unset it
+      # right before invoking cargo so vcpkg actually gets used.
       - name: Build (release)
-        run: cargo build --release
+        shell: bash
+        run: |
+          unset FFMPEG_DIR
+          cargo build --release
 
       - name: Package
         shell: pwsh

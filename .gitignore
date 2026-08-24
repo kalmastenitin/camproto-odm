@@ -1,1 +1,6 @@
 /target
+
+# Machine-local Cargo config (FFMPEG_DIR/LIBCLANG_PATH point at paths that
+# only exist on one dev's machine, and it isn't needed to build -- see
+# README's Windows build instructions for the portable route via vcpkg).
+/.cargo/config.toml

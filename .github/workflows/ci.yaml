@@ -88,11 +88,30 @@ jobs:
       - name: Format
         run: cargo fmt --all --check
 
+      # A repo-local .cargo/config.toml used to hardcode FFMPEG_DIR to one
+      # dev's personal FFmpeg install (now gitignored, not checked out here);
+      # windows-latest runners also happen to preinstall FFMPEG_DIR pointing
+      # at a headers-less FFmpeg CLI package. Either way, ffmpeg-sys-next's
+      # build script checks FFMPEG_DIR before vcpkg, so if it's set to
+      # anything without headers, it always wins and always fails there. And
+      # since GITHUB_ENV can only set env vars, not unset them, the only way
+      # to actually clear it is `unset` right before invoking cargo -- which
+      # is why these steps force `shell: bash` (works on all three OSes) and
+      # unset it unconditionally (a harmless no-op where it isn't set).
       - name: Clippy
-        run: cargo clippy --all-targets --all-features
+        shell: bash
+        run: |
+          unset FFMPEG_DIR
+          cargo clippy --all-targets --all-features
 
       - name: Test
-        run: cargo test --all-features
+        shell: bash
+        run: |
+          unset FFMPEG_DIR
+          cargo test --all-features
 
       - name: Build (release)
-        run: cargo build --release
+        shell: bash
+        run: |
+          unset FFMPEG_DIR
+          cargo build --release
