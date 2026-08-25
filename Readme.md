@@ -103,7 +103,13 @@ statically against the dynamic MSVC CRT, which avoids shipping FFmpeg DLLs.
 If you prefer, `ffmpeg:x64-windows` (dynamic) works too.
 
 Alternatively, if you already have a prebuilt FFmpeg (e.g. a BtbN or gyan.dev
-build), skip vcpkg and set `FFMPEG_DIR` to its root instead.
+build), skip vcpkg and set `FFMPEG_DIR` to its root instead (`setx FFMPEG_DIR
+C:\path\to\ffmpeg`). If `bindgen` can't find `libclang.dll` on its own, also
+set `LIBCLANG_PATH` to your LLVM install's `bin` directory the same way.
+
+Set these as user/system environment variables (`setx`), not in a
+repo-committed `.cargo/config.toml` — a path that only exists on your machine
+will silently break the build for everyone else, CI included.
 
 > Hardware decode (D3D11VA) is used automatically when the installed FFmpeg
 > supports it; otherwise the decoder falls back to software. No config needed.
@@ -138,7 +144,8 @@ yet wired up.
   source allow-list) on every PR and weekly.
 ## Contributing
  
-Issues and PRs welcome. CI runs `fmt`, `clippy`, `test`, and a release build on
+Issues and PRs welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) for the full
+setup and PR process. CI runs `fmt`, `clippy`, `test`, and a release build on
 all three OSes, plus the security audit — please make sure those pass locally:
  
 ```bash

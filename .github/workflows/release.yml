@@ -25,7 +25,7 @@ jobs:
     outputs:
       tag: ${{ steps.version.outputs.tag }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - id: version
         run: |
           if [ -n "${{ inputs.tag }}" ]; then
@@ -43,7 +43,7 @@ jobs:
         working-directory: camproto-odm
     steps:
       - name: Checkout camproto-odm
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           path: camproto-odm
 
@@ -51,7 +51,7 @@ jobs:
       # (`../camproto-ingest`), so the sibling repo has to be checked out
       # alongside it for the path dependency to resolve.
       - name: Checkout camproto-ingest
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: kalmastenitin/camproto-ingest
           path: camproto-ingest
@@ -81,14 +81,22 @@ jobs:
 
       - name: Install FFmpeg (vcpkg)
         shell: pwsh
-        run: & "$env:VCPKG_INSTALLATION_ROOT\vcpkg.exe" install ffmpeg:x64-windows-static-md
+        run: |
+          & "$env:VCPKG_INSTALLATION_ROOT\vcpkg.exe" install ffmpeg:x64-windows-static-md
 
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: camproto-odm
 
+      # windows-latest runners preinstall an FFMPEG_DIR pointing at a
+      # headers-less FFmpeg CLI package, which ffmpeg-sys-next's build script
+      # checks before vcpkg (see ci.yaml for the full explanation). unset it
+      # right before invoking cargo so vcpkg actually gets used.
       - name: Build (release)
-        run: cargo build --release
+        shell: bash
+        run: |
+          unset FFMPEG_DIR
+          cargo build --release
 
       - name: Package
         shell: pwsh
@@ -112,12 +120,12 @@ jobs:
         working-directory: camproto-odm
     steps:
       - name: Checkout camproto-odm
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           path: camproto-odm
 
       - name: Checkout camproto-ingest
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: kalmastenitin/camproto-ingest
           path: camproto-ingest
