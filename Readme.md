@@ -53,21 +53,33 @@ Early, and built in the open, one increment at a time.
 ## Download
  
 Prebuilt binaries for macOS (universal: Intel + Apple Silicon) and Windows
-(x64) are published on the [Releases page](https://github.com/kalmastenitin/camproto-odm/releases).
-Each is a plain zip containing the executable + license — there's no installer.
+(x64) are published on the [Releases page](https://github.com/kalmastenitin/camproto-odm/releases) —
+a `.app` bundle + license for macOS, an `.exe` + license for Windows, each
+zipped. There's no installer.
 
 These builds are **unsigned** (no Apple notarization, no Windows code-signing
 certificate yet):
 
-- **macOS**: Gatekeeper will refuse to open it normally. Right-click the
-  binary → **Open** → **Open** again in the confirmation dialog, or run
-  `xattr -d com.apple.quarantine camproto-odm` first. You'll also need to
-  `chmod +x camproto-odm`.
+- **macOS**: Gatekeeper will refuse to open it normally. Right-click
+  **Camproto ODM.app** → **Open** → **Open** again in the confirmation
+  dialog, or run `xattr -d com.apple.quarantine "Camproto ODM.app"` first.
 - **Windows**: SmartScreen may warn "Windows protected your PC" on first run —
   click **More info** → **Run anyway**. The Windows build links FFmpeg
   statically, so no separate FFmpeg DLLs are needed; it does still expect the
   Microsoft Visual C++ runtime, which is already present on essentially all
   Windows 10/11 machines.
+
+Unsigned doesn't mean unverifiable, though — every release includes:
+
+- **`SHA256SUMS.txt`** — check a download hasn't been corrupted or tampered
+  with in transit: `sha256sum -c SHA256SUMS.txt` (macOS: `shasum -a 256 -c`).
+- **Build provenance attestations** — cryptographic, Sigstore-signed proof
+  that a given zip was actually built by this repo's GitHub Actions workflow
+  from a specific commit, not hand-crafted and uploaded by someone else.
+  Verify with the [GitHub CLI](https://cli.github.com/):
+  ```bash
+  gh attestation verify camproto-odm-vX.Y.Z-windows-x64.zip -R kalmastenitin/camproto-odm
+  ```
 
 ## Build & run
  

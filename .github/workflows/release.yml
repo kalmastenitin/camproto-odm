@@ -15,6 +15,9 @@ on:
 
 permissions:
   contents: write
+  id-token: write
+  attestations: write
+  artifact-metadata: write
 
 env:
   CARGO_TERM_COLOR: always
@@ -107,6 +110,11 @@ jobs:
           Copy-Item LICENSE "$dest\"
           Compress-Archive -Path $dest -DestinationPath "$dest.zip"
 
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: camproto-odm/camproto-odm-*-windows-x64.zip
+
       - uses: actions/upload-artifact@v4
         with:
           name: windows-x64
@@ -147,16 +155,58 @@ jobs:
       - name: Build (x86_64)
         run: cargo build --release --target x86_64-apple-darwin
 
+      # A bare executable double-clicked in Finder launches through
+      # Terminal.app (macOS needs a controlling tty for it), leaving a
+      # Terminal window open behind the actual app. Wrapping it in a minimal
+      # .app bundle (just Contents/MacOS + Info.plist -- no icon, no
+      # cargo-bundle needed) tells LaunchServices to launch it directly.
       - name: Lipo universal binary + package
         run: |
-          dest="camproto-odm-${{ needs.resolve-version.outputs.tag }}-macos-universal"
-          mkdir -p "$dest"
-          lipo -create -output "$dest/camproto-odm" \
+          tag="${{ needs.resolve-version.outputs.tag }}"
+          version="${tag#v}"
+          dest="camproto-odm-$tag-macos-universal"
+          app="$dest/Camproto ODM.app"
+          mkdir -p "$app/Contents/MacOS"
+
+          lipo -create -output "$app/Contents/MacOS/camproto-odm" \
             target/aarch64-apple-darwin/release/camproto-odm \
             target/x86_64-apple-darwin/release/camproto-odm
-          chmod +x "$dest/camproto-odm"
+          chmod +x "$app/Contents/MacOS/camproto-odm"
+
+          cat > "$app/Contents/Info.plist" <<PLIST
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+              <key>CFBundleExecutable</key>
+              <string>camproto-odm</string>
+              <key>CFBundleIdentifier</key>
+              <string>com.camproto.odm</string>
+              <key>CFBundleName</key>
+              <string>Camproto ODM</string>
+              <key>CFBundleDisplayName</key>
+              <string>Camproto ODM</string>
+              <key>CFBundleVersion</key>
+              <string>$version</string>
+              <key>CFBundleShortVersionString</key>
+              <string>$version</string>
+              <key>CFBundlePackageType</key>
+              <string>APPL</string>
+              <key>LSMinimumSystemVersion</key>
+              <string>11.0</string>
+              <key>NSHighResolutionCapable</key>
+              <true/>
+          </dict>
+          </plist>
+          PLIST
+
           cp LICENSE "$dest/"
           zip -r "$dest.zip" "$dest"
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: camproto-odm/camproto-odm-*-macos-universal.zip
 
       - uses: actions/upload-artifact@v4
         with:
@@ -172,6 +222,10 @@ jobs:
           path: dist
           merge-multiple: true
 
+      - name: Checksums
+        working-directory: dist
+        run: sha256sum *.zip > SHA256SUMS.txt
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -179,4 +233,6 @@ jobs:
           name: ${{ needs.resolve-version.outputs.tag }}
           prerelease: ${{ inputs.prerelease }}
           generate_release_notes: true
-          files: dist/*.zip
+          files: |
+            dist/*.zip
+            dist/SHA256SUMS.txt
