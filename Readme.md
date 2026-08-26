@@ -11,7 +11,7 @@ up yet).
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 <p align="center">
-  <img src="assets/camproto-odm.png" alt="camproto-odm ONVIF Device Manager" width="800">
+  <img src="assets/screenshot.png" alt="camproto-odm ONVIF Device Manager" width="800">
   <br>
   <em>ONVIF Device Manager — live view with PTZ overlay and timeline seek</em>
 </p>
