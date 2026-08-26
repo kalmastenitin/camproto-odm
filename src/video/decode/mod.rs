@@ -10,13 +10,16 @@ use camproto_ingest::frame::{Codec, MediaFrame};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 
+// Only macOS and Windows actually decode video; on other platforms nothing
+// ever constructs a YuvFrame, so keep it out of those builds entirely rather
+// than carrying it as dead code.
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 pub struct YuvFrame {
     pub y_plane: Vec<u8>,
     pub u_plane: Vec<u8>,
     pub v_plane: Vec<u8>,
     pub width: u32,
     pub height: u32,
-    pub pts: u64,
 }
 
 pub type LatestFrame = Arc<Mutex<Option<RgbaFrame>>>;
@@ -28,6 +31,9 @@ pub fn new_latest_frame() -> LatestFrame {
 #[derive(Debug)]
 pub enum DecodeError {
     InitFailed(String),
+    // Only constructed on macOS/Windows, where sending a packet to the
+    // platform decoder can actually fail after init.
+    #[allow(dead_code)]
     SendFailed(String),
 }
 
@@ -44,7 +50,7 @@ impl std::fmt::Display for DecodeError {
 type PlatformDecoder = macos::VideoToolboxDecoder;
 
 #[cfg(target_os = "windows")]
-type PlatformDecoder = windows::MediaFoundationDecoder;
+type PlatformDecoder = windows::FfmpegDecoder;
 
 // Windows and Linux decoders (FFmpeg-based) land in a follow-up step. Until
 // then, this platform simply doesn't decode video — everything else
@@ -84,14 +90,18 @@ pub fn spawn_decode_task(
 ) {
     // Bridge async -> blocking. Bounded to 1 so a slow decoder always works
     // on the newest frame rather than building a backlog.
-    let (tx, rx_blocking) = mpsc::sync_channel::<MediaFrame>(1);
+    let (tx, rx_blocking) = mpsc::sync_channel::<MediaFrame>(16);
     let id_async = stream_id.clone();
 
     tokio::spawn(async move {
         loop {
             match rx.recv().await {
                 Ok(frame) => {
-                    let _ = tx.try_send(frame);
+                    if let Err(mpsc::TrySendError::Full(dropped)) = tx.try_send(frame) {
+                        if dropped.is_keyframe {
+                            eprintln!("[{id_async}] Buffer full, dropped keyframe")
+                        }
+                    }
                 }
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
                     eprintln!("[{id_async}] dropped {n} frames (decode falling behind)");
@@ -123,7 +133,17 @@ pub fn spawn_decode_task(
                                 latest.clone(),
                             ) {
                                 Ok(dec) => {
-                                    println!("[{id_thread}] H265 decoder ready");
+                                    #[cfg(target_os = "windows")]
+                                    eprintln!(
+                                        "[{id_thread}] H265 decoder ready ({})",
+                                        if dec.is_hardware() {
+                                            "D3D11VA hardware"
+                                        } else {
+                                            "SOFTWARE"
+                                        }
+                                    );
+                                    #[cfg(not(target_os = "windows"))]
+                                    eprintln!("[{id_thread}] H265 decoder ready");
                                     decoder = Some(dec);
                                 }
                                 Err(e) => eprintln!("[{id_thread}] H265 init: {e}"),
@@ -144,7 +164,17 @@ pub fn spawn_decode_task(
                                 latest.clone(),
                             ) {
                                 Ok(dec) => {
-                                    println!("[{id_thread}] H264 decoder ready");
+                                    #[cfg(target_os = "windows")]
+                                    eprintln!(
+                                        "[{id_thread}] H264 decoder ready ({})",
+                                        if dec.is_hardware() {
+                                            "D3D11VA hardware"
+                                        } else {
+                                            "SOFTWARE"
+                                        }
+                                    );
+                                    #[cfg(not(target_os = "windows"))]
+                                    eprintln!("[{id_thread}] H264 decoder ready");
                                     decoder = Some(dec);
                                 }
                                 Err(e) => eprintln!("[{id_thread}] H264 init: {e}"),

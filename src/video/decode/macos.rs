@@ -58,6 +58,9 @@ struct VTDecompressionOutputCallbackRecord {
     refcon: *mut c_void,
 }
 
+// Three distinct frameworks, not a duplicate — clippy's duplicated_attributes
+// lint flags repeated `#[link]` paths without looking at the `name` argument.
+#[allow(clippy::duplicated_attributes)]
 #[link(name = "VideoToolbox", kind = "framework")]
 #[link(name = "CoreMedia", kind = "framework")]
 #[link(name = "CoreVideo", kind = "framework")]
@@ -340,18 +343,12 @@ unsafe extern "C" fn decompress_callback(
     status: OSStatus,
     _info_flags: u32,
     image_buffer: CVPixelBufferRef,
-    pts: CMTime,
+    _pts: CMTime,
     _duration: CMTime,
 ) {
     if status != 0 || image_buffer.is_null() {
         return;
     }
-
-    let pts_us = if pts.timescale != 0 {
-        (pts.value as u64) * 1_000_000 / pts.timescale as u64
-    } else {
-        0
-    };
 
     CVPixelBufferLockBaseAddress(image_buffer, 0);
 
@@ -374,8 +371,8 @@ unsafe extern "C" fn decompress_callback(
     // into separate U/V planes at that natural resolution.
     let uv_ptr = CVPixelBufferGetBaseAddressOfPlane(image_buffer, 1);
     let uv_stride = CVPixelBufferGetBytesPerRowOfPlane(image_buffer, 1);
-    let uv_width = ((width + 1) / 2) as usize;
-    let uv_height = ((height + 1) / 2) as usize;
+    let uv_width = width.div_ceil(2) as usize;
+    let uv_height = height.div_ceil(2) as usize;
 
     let mut u_plane = Vec::with_capacity(uv_width * uv_height);
     let mut v_plane = Vec::with_capacity(uv_width * uv_height);
@@ -396,7 +393,6 @@ unsafe extern "C" fn decompress_callback(
         v_plane,
         width,
         height,
-        pts: pts_us,
     };
     let rgba = super::super::render::yuv_to_rgba(&yuv);
 

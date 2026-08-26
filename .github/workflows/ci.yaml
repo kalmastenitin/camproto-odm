@@ -1,31 +1,46 @@
 name: CI
- 
+
 on:
   push:
     branches: [main]
   pull_request:
- 
+
 env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: "-D warnings"
- 
+
 jobs:
   build:
     name: ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: camproto-odm
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
- 
+
     steps:
-      - uses: actions/checkout@v4
- 
+      - name: Checkout camproto-odm
+        uses: actions/checkout@v7
+        with:
+          path: camproto-odm
+
+      # camproto-odm depends on camproto-ingest via a relative path
+      # (`../camproto-ingest`), so the sibling repo has to be checked out
+      # alongside it for the path dependency to resolve.
+      - name: Checkout camproto-ingest
+        uses: actions/checkout@v7
+        with:
+          repository: kalmastenitin/camproto-ingest
+          path: camproto-ingest
+
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
- 
+
       # eframe/winit need X11 + xkb dev headers to build on Linux.
       # Note: NO libssl-dev — we intentionally have no TLS/OpenSSL dependency.
       - name: Linux system deps
@@ -35,17 +50,68 @@ jobs:
           sudo apt-get install -y \
             libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
             libxkbcommon-dev libgl1-mesa-dev
- 
+
+      # Windows video decode links FFmpeg (libavcodec) via ffmpeg-sys-next, so
+      # the FFmpeg dev libraries must be present at build time (see README).
+      # windows-latest runners ship vcpkg preinstalled at C:\vcpkg but only
+      # export VCPKG_INSTALLATION_ROOT, not the VCPKG_ROOT the `vcpkg` crate
+      # looks for, so we point that explicitly. VCPKGRS_TRIPLET pins the
+      # static-md triplet so FFmpeg links statically into the exe and no
+      # DLLs need shipping.
+      - name: Windows vcpkg env
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          echo "VCPKG_ROOT=$VCPKG_INSTALLATION_ROOT" >> "$GITHUB_ENV"
+          echo "VCPKGRS_TRIPLET=x64-windows-static-md" >> "$GITHUB_ENV"
+
+      - name: Cache vcpkg FFmpeg
+        if: runner.os == 'Windows'
+        uses: actions/cache@v4
+        with:
+          path: |
+            C:\vcpkg\installed
+            C:\vcpkg\packages
+            C:\vcpkg\buildtrees
+          key: vcpkg-ffmpeg-x64-windows-static-md-v1
+
+      - name: Install FFmpeg (vcpkg)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          & "$env:VCPKG_INSTALLATION_ROOT\vcpkg.exe" install ffmpeg:x64-windows-static-md
+
       - uses: Swatinem/rust-cache@v2
- 
+        with:
+          workspaces: camproto-odm
+
       - name: Format
         run: cargo fmt --all --check
- 
+
+      # A repo-local .cargo/config.toml used to hardcode FFMPEG_DIR to one
+      # dev's personal FFmpeg install (now gitignored, not checked out here);
+      # windows-latest runners also happen to preinstall FFMPEG_DIR pointing
+      # at a headers-less FFmpeg CLI package. Either way, ffmpeg-sys-next's
+      # build script checks FFMPEG_DIR before vcpkg, so if it's set to
+      # anything without headers, it always wins and always fails there. And
+      # since GITHUB_ENV can only set env vars, not unset them, the only way
+      # to actually clear it is `unset` right before invoking cargo -- which
+      # is why these steps force `shell: bash` (works on all three OSes) and
+      # unset it unconditionally (a harmless no-op where it isn't set).
       - name: Clippy
-        run: cargo clippy --all-targets --all-features
- 
+        shell: bash
+        run: |
+          unset FFMPEG_DIR
+          cargo clippy --all-targets --all-features
+
       - name: Test
-        run: cargo test --all-features
- 
+        shell: bash
+        run: |
+          unset FFMPEG_DIR
+          cargo test --all-features
+
       - name: Build (release)
-        run: cargo build --release
+        shell: bash
+        run: |
+          unset FFMPEG_DIR
+          cargo build --release

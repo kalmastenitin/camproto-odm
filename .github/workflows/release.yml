@@ -1,0 +1,182 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag (e.g. v0.1.0). Leave blank to derive from Cargo.toml's version."
+        required: false
+        type: string
+      prerelease:
+        description: "Mark the GitHub Release as a pre-release"
+        required: false
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  resolve-version:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v7
+      - id: version
+        run: |
+          if [ -n "${{ inputs.tag }}" ]; then
+            echo "tag=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
+          else
+            v=$(grep -m1 '^version' Cargo.toml | sed -E 's/version = "(.*)"/\1/')
+            echo "tag=v$v" >> "$GITHUB_OUTPUT"
+          fi
+
+  build-windows:
+    needs: resolve-version
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: camproto-odm
+    steps:
+      - name: Checkout camproto-odm
+        uses: actions/checkout@v7
+        with:
+          path: camproto-odm
+
+      # camproto-odm depends on camproto-ingest via a relative path
+      # (`../camproto-ingest`), so the sibling repo has to be checked out
+      # alongside it for the path dependency to resolve.
+      - name: Checkout camproto-ingest
+        uses: actions/checkout@v7
+        with:
+          repository: kalmastenitin/camproto-ingest
+          path: camproto-ingest
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      # windows-latest runners ship vcpkg preinstalled at C:\vcpkg but only
+      # export VCPKG_INSTALLATION_ROOT, not the VCPKG_ROOT the `vcpkg` crate
+      # looks for, so we point that explicitly. VCPKGRS_TRIPLET pins the
+      # static-md triplet so FFmpeg links statically into the exe and no
+      # FFmpeg DLLs need shipping alongside it (see README).
+      - name: Windows vcpkg env
+        shell: bash
+        run: |
+          echo "VCPKG_ROOT=$VCPKG_INSTALLATION_ROOT" >> "$GITHUB_ENV"
+          echo "VCPKGRS_TRIPLET=x64-windows-static-md" >> "$GITHUB_ENV"
+
+      - name: Cache vcpkg FFmpeg
+        uses: actions/cache@v4
+        with:
+          path: |
+            C:\vcpkg\installed
+            C:\vcpkg\packages
+            C:\vcpkg\buildtrees
+          key: vcpkg-ffmpeg-x64-windows-static-md-v1
+
+      - name: Install FFmpeg (vcpkg)
+        shell: pwsh
+        run: |
+          & "$env:VCPKG_INSTALLATION_ROOT\vcpkg.exe" install ffmpeg:x64-windows-static-md
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: camproto-odm
+
+      # windows-latest runners preinstall an FFMPEG_DIR pointing at a
+      # headers-less FFmpeg CLI package, which ffmpeg-sys-next's build script
+      # checks before vcpkg (see ci.yaml for the full explanation). unset it
+      # right before invoking cargo so vcpkg actually gets used.
+      - name: Build (release)
+        shell: bash
+        run: |
+          unset FFMPEG_DIR
+          cargo build --release
+
+      - name: Package
+        shell: pwsh
+        run: |
+          $dest = "camproto-odm-${{ needs.resolve-version.outputs.tag }}-windows-x64"
+          New-Item -ItemType Directory -Force -Path $dest | Out-Null
+          Copy-Item target\release\camproto-odm.exe "$dest\"
+          Copy-Item LICENSE "$dest\"
+          Compress-Archive -Path $dest -DestinationPath "$dest.zip"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-x64
+          path: camproto-odm/camproto-odm-*-windows-x64.zip
+
+  build-macos:
+    needs: resolve-version
+    runs-on: macos-latest
+    defaults:
+      run:
+        working-directory: camproto-odm
+    steps:
+      - name: Checkout camproto-odm
+        uses: actions/checkout@v7
+        with:
+          path: camproto-odm
+
+      - name: Checkout camproto-ingest
+        uses: actions/checkout@v7
+        with:
+          repository: kalmastenitin/camproto-ingest
+          path: camproto-ingest
+
+      # macos-latest runners are Apple Silicon; add the Intel target so we
+      # can lipo a universal binary that runs natively on both.
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: camproto-odm
+
+      - name: Build (aarch64)
+        run: cargo build --release --target aarch64-apple-darwin
+
+      - name: Build (x86_64)
+        run: cargo build --release --target x86_64-apple-darwin
+
+      - name: Lipo universal binary + package
+        run: |
+          dest="camproto-odm-${{ needs.resolve-version.outputs.tag }}-macos-universal"
+          mkdir -p "$dest"
+          lipo -create -output "$dest/camproto-odm" \
+            target/aarch64-apple-darwin/release/camproto-odm \
+            target/x86_64-apple-darwin/release/camproto-odm
+          chmod +x "$dest/camproto-odm"
+          cp LICENSE "$dest/"
+          zip -r "$dest.zip" "$dest"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-universal
+          path: camproto-odm/camproto-odm-*-macos-universal.zip
+
+  publish:
+    needs: [resolve-version, build-windows, build-macos]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.resolve-version.outputs.tag }}
+          name: ${{ needs.resolve-version.outputs.tag }}
+          prerelease: ${{ inputs.prerelease }}
+          generate_release_notes: true
+          files: dist/*.zip

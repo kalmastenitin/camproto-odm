@@ -110,8 +110,8 @@ fn build_auth_header(
 
 fn parse_auth_params(challenge: &str) -> std::collections::HashMap<String, String> {
     let after = challenge
-        .splitn(2, char::is_whitespace)
-        .nth(1)
+        .split_once(char::is_whitespace)
+        .map(|(_, rest)| rest)
         .unwrap_or("");
     let mut map = std::collections::HashMap::new();
     let mut cur = String::new();
