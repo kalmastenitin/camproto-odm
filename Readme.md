@@ -69,6 +69,18 @@ certificate yet):
   Microsoft Visual C++ runtime, which is already present on essentially all
   Windows 10/11 machines.
 
+Unsigned doesn't mean unverifiable, though — every release includes:
+
+- **`SHA256SUMS.txt`** — check a download hasn't been corrupted or tampered
+  with in transit: `sha256sum -c SHA256SUMS.txt` (macOS: `shasum -a 256 -c`).
+- **Build provenance attestations** — cryptographic, Sigstore-signed proof
+  that a given zip was actually built by this repo's GitHub Actions workflow
+  from a specific commit, not hand-crafted and uploaded by someone else.
+  Verify with the [GitHub CLI](https://cli.github.com/):
+  ```bash
+  gh attestation verify camproto-odm-vX.Y.Z-windows-x64.zip -R kalmastenitin/camproto-odm
+  ```
+
 ## Build & run
  
 Requires Rust (see [`rust-toolchain.toml`](rust-toolchain.toml)).

@@ -15,6 +15,9 @@ on:
 
 permissions:
   contents: write
+  id-token: write
+  attestations: write
+  artifact-metadata: write
 
 env:
   CARGO_TERM_COLOR: always
@@ -107,6 +110,11 @@ jobs:
           Copy-Item LICENSE "$dest\"
           Compress-Archive -Path $dest -DestinationPath "$dest.zip"
 
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: camproto-odm/camproto-odm-*-windows-x64.zip
+
       - uses: actions/upload-artifact@v4
         with:
           name: windows-x64
@@ -158,6 +166,11 @@ jobs:
           cp LICENSE "$dest/"
           zip -r "$dest.zip" "$dest"
 
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: camproto-odm/camproto-odm-*-macos-universal.zip
+
       - uses: actions/upload-artifact@v4
         with:
           name: macos-universal
@@ -172,6 +185,10 @@ jobs:
           path: dist
           merge-multiple: true
 
+      - name: Checksums
+        working-directory: dist
+        run: sha256sum *.zip > SHA256SUMS.txt
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -179,4 +196,6 @@ jobs:
           name: ${{ needs.resolve-version.outputs.tag }}
           prerelease: ${{ inputs.prerelease }}
           generate_release_notes: true
-          files: dist/*.zip
+          files: |
+            dist/*.zip
+            dist/SHA256SUMS.txt
