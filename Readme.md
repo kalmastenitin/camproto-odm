@@ -9,7 +9,15 @@ up yet).
 [![CI](https://github.com/kalmastenitin/camproto-odm/actions/workflows/ci.yaml/badge.svg)](https://github.com/kalmastenitin/camproto-odm/actions/workflows/ci.yaml)
 [![Security audit](https://github.com/kalmastenitin/camproto-odm/actions/workflows/audit.yml/badge.svg)](https://github.com/kalmastenitin/camproto-odm/actions/workflows/audit.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
- 
+
+<p align="center">
+  <img src="assets/camproto-odm.png" alt="camproto-odm ONVIF Device Manager" width="800">
+  <br>
+  <em>ONVIF Device Manager — live view with PTZ overlay and timeline seek</em>
+</p>
+
+</p>
+
 ## Why
  
 Most ONVIF tooling is Windows-only, closed source, and struggles to render
